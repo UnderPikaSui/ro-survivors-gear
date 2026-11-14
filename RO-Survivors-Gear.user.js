@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 試用版
 // @namespace ro-survivors-helper
-// @version 4.0
+// @version 4.1
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @match https://ro-survivors.com/*
@@ -280,7 +280,7 @@ function mountGearAssistant() {
   const button = document.createElement("button");
   button.type = "button";
   const updateAssistantButton = running => {
-    button.textContent = "RO 練等助手 " + "Gear V4.0" + " · " + (running ? "啟動中" : "已關閉");
+    button.textContent = "RO 練等助手 " + "Gear V4.1" + " · " + (running ? "啟動中" : "已關閉");
     button.setAttribute("aria-pressed", String(running));
   };
   updateAssistantButton(false);
@@ -555,6 +555,7 @@ function mountGearAssistant() {
     return coordinateRequest;
   };
   share.onclick = () => connectCoordinates(true, true);
+  const taiwanGame = location.hostname === "ro.hans-webgametw.com";
   const difficultyFields = [
     ["count", "敵人數量", 350, 300],
     ["damage", "敵人傷害", 175, 150],
@@ -562,13 +563,15 @@ function mountGearAssistant() {
     ["speed", "敵人速度", 175, 150],
     ["events", "事件數量", 250, 200]
   ];
+  if (taiwanGame) difficultyFields.push(["tier","刷關等級",20,20]);
   const difficultyKey = mode => "ro-helper-difficulty-" + mode;
   const getDifficulty = mode => {
     let saved;
     try { saved = JSON.parse(localStorage.getItem(settingKey(difficultyKey(mode))) ?? localStorage.getItem(settingKey("ro-helper-difficulty"))); } catch {}
     if (!saved || typeof saved !== "object" || Array.isArray(saved)) return null;
     return Object.fromEntries(difficultyFields.map(([key, , soloMax, partyMax]) => {
-      const max = mode === "party" ? partyMax : soloMax;
+      if (key === "tier") return [key, Math.min(20,Math.max(1,Math.round(Number(saved[key])) || 1))];
+      const max = taiwanGame ? 2000 : mode === "party" ? partyMax : soloMax;
       const value = Number(saved?.[key]);
       return [key, Number.isFinite(value) && value >= 100 ? Math.min(max, Math.round(value / 5) * 5) : 100];
     }));
@@ -596,9 +599,9 @@ function mountGearAssistant() {
       const input = document.createElement("input");
       const output = document.createElement("output");
       input.type = "range";
-      input.min = 100;
-      input.step = 5;
-      const update = () => { output.textContent = input.value + "%"; };
+      input.min = key === "tier" ? 1 : 100;
+      input.step = key === "tier" ? 1 : 5;
+      const update = () => { output.textContent = key === "tier" ? "Lv " + input.value : input.value + "%"; };
       input.oninput = update;
       row.append(name + " ", input, output);
       form.append(row);
@@ -608,8 +611,8 @@ function mountGearAssistant() {
     const loadInputs = () => {
       const saved = drafts.get(displayed) ?? getDifficulty(displayed);
       inputs.forEach(([key,input],index) => {
-        input.max = displayed === "party" ? difficultyFields[index][3] : difficultyFields[index][2];
-        input.value = saved?.[key] ?? 100;
+        input.max = key === "tier" ? 20 : taiwanGame ? 2000 : displayed === "party" ? difficultyFields[index][3] : difficultyFields[index][2];
+        input.value = saved?.[key] ?? Number(input.min);
         input.oninput();
       });
     };
@@ -648,15 +651,16 @@ function mountGearAssistant() {
     const missing = sliders.find(({input, output}) => !input || !output);
     if (missing) return "找不到難度欄位：" + missing.name;
     for (const {key, name, input, output} of sliders) {
+      const scale = key === "tier" ? 1 : 100;
       const min = Number(input.min || 1);
-      const max = Number(input.max || saved[key] / 100);
+      const max = Number(input.max || saved[key] / scale);
       const step = Number(input.step) || 0.05;
-      const value = Math.min(max,Math.max(min,saved[key] / 100));
-      const percent = Math.round(Math.min(max,min + Math.round((value-min)/step)*step)*100);
-      input.value = String(percent / 100);
+      const value = Math.min(max,Math.max(min,saved[key] / scale));
+      const percent = Math.round(Math.min(max,min + Math.round((value-min)/step)*step)*scale);
+      input.value = String(percent / scale);
       input.dispatchEvent(new Event("input", {bubbles:true}));
-      if (Math.round(Number(input.value) * 100) !== percent ||
-          output.textContent.trim() !== percent + "%") {
+      if (Math.round(Number(input.value) * scale) !== percent ||
+          output.textContent.trim() !== (key === "tier" ? "Lv " + percent : percent + "%")) {
         return "難度未套用：" + name + " " + percent + "%";
       }
     }
@@ -1254,7 +1258,7 @@ const timer=setInterval(()=>{
   if (settlement || !battleHud && !choosingCard) patrolStartedAt = null;
   if(document.hidden||document.querySelector("#ro-helper-settings[open]")){release();return}if(confirmDrop()){release();return}if(partyMode.value==="member"||partyMode.value==="follow"){const ready=partyReadyButton();if(ready){release();if(!confirmedParty.has(ready)){confirmedParty.add(ready);ready.click();status.textContent="已同意隊伍出發"}return}}const list=buttons();const byId=id=>list.find(e=>e.id===id);const exact=t=>list.find(e=>label(e)===t);const result=byId("btn-restart");if(!result)returnedResult=undefined;const go=byId("stg-go");const partyLeader=partyMode.value==="leader";const followLeader=partyMode.value==="follow";const partyMember=partyMode.value==="member"||followLeader;const difficultyDialog = expeditionDifficultyDialog();
 const proposal = partyLeader ? partyProposalButton(difficultyDialog, visible) : null;
-const field = proposal || exact("前往野外");
+const field = proposal || (difficultyDialog && list.find(button => button === difficultyDialog.querySelector("#npc-options button.primary")));
 if (partyLeader && difficultyDialog && !proposal) {
   release();
   const isPartyDialog = difficultyDialog.querySelector("#npc-text .diff input[data-pick]");
@@ -1296,7 +1300,7 @@ if (!partyMember && stageCards.length && !stageName) {
   status.textContent = "請在助手的關卡設定選擇關卡";
   return;
 }
-const hud=document.body.innerText;const chest=/選擇\s*一件\s*裝備/.test(document.body.innerText)&&/寶箱/.test(document.body.innerText);const picking=chest||/(?:選擇|強化)\s*技能/.test(document.body.innerText)&&/升級\s*[！!]/.test(document.body.innerText);const inBattle=Boolean(battleHud)||/\bEXP\b/.test(hud)&&/\b\d{2}:\d{2}\b/.test(hud)&&/\(\s*-?\d+\s*,\s*-?\d+\s*\)/.test(hud);if(inBattle){partyWaitingUntil=0;retriedSoloDialog=false}if(partyLeader&&!inBattle&&!picking&&!result&&Date.now()<partyWaitingUntil){release();return}if(partyMember&&!inBattle&&!picking&&!result){release();status.textContent=followLeader?"跟隨隊長：等待隊伍出發確認":"隊員模式：等待隊伍出發確認";return}if(!stageName&&!captain&&!inBattle&&!picking&&!result){status.textContent="請先開啟遠征選單";return}const stage=stageName===highestStageMode?highestPlayableStage(stageCards,rejectedStages,Boolean(go)):stageCards.find(card=>stageNameOf(card)===stageName&&!stageIsLocked(card));let next;if(!picking){pickerFirstCard=null;attemptedCard=null;attempts=0;nextMenuAt=0}if(picking){release();const picker = document.querySelector("#picker");
+const hud=document.body.innerText;const visiblePicker=document.querySelector("#picker:not(.hidden)");const pickerTitle=visiblePicker?.querySelector("#pk-title")?.textContent || "";const pickerSubtitle=visiblePicker?.querySelector("#pk-sub")?.textContent || "";const chest=!!visiblePicker && /寶箱|寶物箱|(?:treasure\s+)?chest|cofre/i.test(pickerTitle);const picking=!!visiblePicker && (chest || /升級|level\s*up/i.test(pickerTitle) || /(?:選擇|強化)\s*技能|(?:choose|upgrade)\s+(?:a\s+)?skill|elige una habilidad|mejora una habilidad/i.test(pickerSubtitle));const inBattle=Boolean(battleHud)||(/\bEXP\b/.test(hud)&&/\b\d{2}:\d{2}\b/.test(hud)&&/\(\s*-?\d+\s*,\s*-?\d+\s*\)/.test(hud));if(inBattle){partyWaitingUntil=0;retriedSoloDialog=false}if(partyLeader&&!inBattle&&!picking&&!result&&Date.now()<partyWaitingUntil){release();return}if(partyMember&&!inBattle&&!picking&&!result){release();status.textContent=followLeader?"跟隨隊長：等待隊伍出發確認":"隊員模式：等待隊伍出發確認";return}if(!stageName&&!captain&&!inBattle&&!picking&&!result){status.textContent="請先開啟遠征選單";return}const stage=stageName===highestStageMode?highestPlayableStage(stageCards,rejectedStages,Boolean(go)):stageCards.find(card=>stageNameOf(card)===stageName&&!stageIsLocked(card));let next;if(!picking){pickerFirstCard=null;attemptedCard=null;attempts=0;nextMenuAt=0}if(picking){release();const picker = document.querySelector("#picker");
 if (!picker || picker.classList.contains("hidden") || picker.classList.contains("closing")) return;
 const confirm = picker.querySelector("#pk-cards .pk-slot.asking [data-yes]");
 if (visible(confirm)) {
@@ -1385,7 +1389,7 @@ return;
   departing = false;
   delete document.documentElement.dataset.roHelperFinishVictory;
   next = result;
-}else if(stage){if(!stage.classList.contains("sel")){next=stage}else if(go&&!departing){next=go;departing=true;rotationRun=stageMode.value==="rotation"?{stage:stageName}:undefined}}else if(stageCards.length&&stageName){release();status.textContent=stageName===highestStageMode?"目前沒有可出發的一般關卡":"指定關卡目前無法出發："+stageName;return}else if(!go&&!field){departing=false;if(captain)next=captain}if(!next){if(last?.id!=="stg-go")last=undefined;const view=document.body.innerText;const battle=!picking&&!result&&!go&&!field&&!captain&&inBattle&&!document.querySelector("#picker:not(.hidden), #gameover:not(.hidden), #npc-dialog:not(.hidden)")&&!/(暫停|繼續遊戲)/.test(view)&&!document.activeElement?.matches("input,textarea,select,[contenteditable=true]");release();if(battle){if(!autoMove){blocked.clear();previousPosition=null;previousDirection=null;escapeDirection=-1;escapeUntil=0;status.textContent="手動移動";return}const packet=readLivePacket();const fresh=packet&&Date.now()-packet.at>=0&&Date.now()-packet.at<750&&packet.routes?.length===route.length;if (!fresh) {
+}else if(stage){if(!stage.classList.contains("sel")){next=stage}else if(go&&!departing){next=go;departing=true;rotationRun=stageMode.value==="rotation"?{stage:stageName}:undefined}}else if(stageCards.length&&stageName){release();status.textContent=stageName===highestStageMode?"目前沒有可出發的一般關卡":"指定關卡目前無法出發："+stageName;return}else if(!go&&!field){departing=false;if(captain)next=captain}if(!next){if(last?.id!=="stg-go")last=undefined;const view=document.body.innerText;const battle=!visiblePicker&&!picking&&!result&&!go&&!field&&!captain&&inBattle&&!document.querySelector("#picker:not(.hidden), #gameover:not(.hidden), #npc-dialog:not(.hidden)")&&!/(暫停|繼續遊戲)/.test(view)&&!document.activeElement?.matches("input,textarea,select,[contenteditable=true]");release();if(battle){if(!autoMove){blocked.clear();previousPosition=null;previousDirection=null;escapeDirection=-1;escapeUntil=0;status.textContent="手動移動";return}const packet=readLivePacket();const fresh=packet&&Date.now()-packet.at>=0&&Date.now()-packet.at<750&&packet.routes?.length===route.length;if (!fresh) {
   if (gearMovementMode.value === "smart") {
     const {roHelperError,roHelperPhase} = document.documentElement.dataset;
     status.textContent = "智慧走位：" + (roHelperError || roHelperPhase || "等待即時戰鬥資料");
