@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 試用版
 // @namespace ro-survivors-helper
-// @version 4.1
+// @version 4.2
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @match https://ro-survivors.com/*
@@ -158,7 +158,7 @@ function locateBattleLoop(source) {
           }
           return [...zones].flatMap(({shape, argument, zone}) => {
             const {x,y,w,h,rotation=0,alpha}=zone;
-            if (!(alpha>0) || ![x,y,w,h,rotation].every(Number.isFinite) || w<=0 || h<=0) return [];
+            if (!(alpha>=0) || ![x,y,w,h,rotation].every(Number.isFinite) || w<=0 || h<=0) return [];
             return [[shape,x,y,w,h,rotation,Number(argument)||0]];
           });
         };
@@ -267,8 +267,9 @@ function locateBattleLoop(source) {
       lastAttempt = performance.now();
       void findDirection();
     }
+    readHazards(z);
     if (!direction) return;
-    try { (() => { const root = document.documentElement; if (!z?.player || performance.now() - Number(root.dataset.roHelperLast || 0) < 100) return false; const {x,y} = z.player; const partyLeader = readPartyLeader(z, performance.now()); const cleanup = victoryCleanup(z,root.dataset,Date.now(),victoryEmptySince); const gearWaypoint = readGearWaypoint(z,cleanup,gearPaths,performance.now()); const reach = gearWaypoint ? Math.max(24,Math.min(60,Math.hypot(gearWaypoint.x-x,gearWaypoint.y-y))) : 60; const routes = [[1,0],[0,1],[-1,0],[0,-1],[1,-1],[1,1],[-1,1],[-1,-1]].map(([dx,dy]) => { const length=Math.hypot(dx,dy); const [vx,vy]=direction(dx/length,dy/length); const clear=[.2,.4,.6,.8,1].every(fraction=>{const step=reach*fraction;const tx=x+vx*step,ty=y+vy*step;return tx>=z.bounds.x0&&tx<=z.bounds.x1&&ty>=z.bounds.y0&&ty<=z.bounds.y1&&(!z.walk||z.walk.walkable(tx,ty))});return [x+vx*reach,y+vy*reach,clear] }); const nearby=e=>!e.dead&&Math.hypot(e.x-x,e.y-y)<520; root.dataset.roHelperLive=JSON.stringify({at:Date.now(),battleSeconds:z.time,lootLog:lootSnapshot(z),player:[x,y],...partyLeader,cleanup,gearWaypoint,routes,zeny:z.zeny,chestCost:z.chestCost(),hazards:readHazards(z),bell:readBell(z),enemies:z.enemies.filter(nearby).map(e=>[e.x,e.y]),drops:z.pickups.filter(e=>!e.dead&&Math.hypot(e.x-x,e.y-y)<(e.kind==='loot'||e.kind==='card'?800:520)).map(e=>[e.kind,e.x,e.y])});root.dataset.roHelperLast=String(performance.now());return false })(); setPhase(""); delete document.documentElement.dataset.roHelperError; } catch (error) {
+    try { (() => { const root = document.documentElement; if (!z?.player || performance.now() - Number(root.dataset.roHelperLast || 0) < 100) return false; const {x,y} = z.player; const partyLeader = readPartyLeader(z, performance.now()); const cleanup = victoryCleanup(z,root.dataset,Date.now(),victoryEmptySince); const gearWaypoint = readGearWaypoint(z,cleanup,gearPaths,performance.now()); const reach = gearWaypoint ? Math.max(24,Math.min(60,Math.hypot(gearWaypoint.x-x,gearWaypoint.y-y))) : 60; const routes = [[1,0],[0,1],[-1,0],[0,-1],[1,-1],[1,1],[-1,1],[-1,-1]].map(([dx,dy]) => { const length=Math.hypot(dx,dy); const [vx,vy]=direction(dx/length,dy/length); const clearAt = length => [.2,.4,.6,.8,1].every(fraction=>{const step=length*fraction;const tx=x+vx*step,ty=y+vy*step;return tx>=z.bounds.x0&&tx<=z.bounds.x1&&ty>=z.bounds.y0&&ty<=z.bounds.y1&&(!z.walk||z.walk.walkable(tx,ty))});const distance = [reach,reach/2,reach/4].find(clearAt) || reach; return [x+vx*distance,y+vy*distance,clearAt(distance)] }); const nearby=e=>!e.dead&&Math.hypot(e.x-x,e.y-y)<520; root.dataset.roHelperLive=JSON.stringify({at:Date.now(),battleSeconds:z.time,lootLog:lootSnapshot(z),player:[x,y],...partyLeader,cleanup,gearWaypoint,routes,zeny:z.zeny,chestCost:z.chestCost(),hazards:readHazards(z),bell:readBell(z),enemies:z.enemies.filter(nearby).map(e=>[e.x,e.y]),drops:z.pickups.filter(e=>!e.dead&&Math.hypot(e.x-x,e.y-y)<(e.kind==='loot'||e.kind==='card'?800:520)).map(e=>[e.kind,e.x,e.y])});root.dataset.roHelperLast=String(performance.now());return false })(); setPhase(""); delete document.documentElement.dataset.roHelperError; } catch (error) {
       document.documentElement.dataset.roHelperError = error.message;
     }
   },100);
@@ -280,7 +281,7 @@ function mountGearAssistant() {
   const button = document.createElement("button");
   button.type = "button";
   const updateAssistantButton = running => {
-    button.textContent = "RO 練等助手 " + "Gear V4.1" + " · " + (running ? "啟動中" : "已關閉");
+    button.textContent = "RO 練等助手 " + "Gear V4.2" + " · " + (running ? "啟動中" : "已關閉");
     button.setAttribute("aria-pressed", String(running));
   };
   updateAssistantButton(false);
@@ -1437,7 +1438,7 @@ const canOpenChest=Number.isFinite(packet.zeny)&&Number.isFinite(packet.chestCos
   gear = Math.max(0,here-there);
   if (!cleanup) loot = Math.max(loot,gear/3);
 }
-const endClearance=hazardClearance(zones,x,y);const crossesRed=[.25,.5,.75,1].some(f=>hazardClearance(zones,px+(x-px)*f,py+(y-py)*f)<=0);return {score,chest,loot,gear,endClearance,crossesRed,unsafe,walkable,uncertain:false,escapeCost:pressure-Math.min(150,clearance)*35}});if(scores){const pos=fresh?packet.player.map(Math.round).join(","):view.match(/\(\s*(-?\d+)\s*,\s*(-?\d+)\s*\)/)?.slice(1).join(",");if(pos&&pos===previousPosition&&previousDirection&&Date.now()-lastCoordinateAt>=800){const id=pos+":"+previousDirection;blocked.set(id,Date.now()+6500);still++}else{still=0}if(pos!==previousPosition||Date.now()-lastCoordinateAt>=800){previousPosition=pos;lastCoordinateAt=Date.now()}for(const [id,until] of blocked)if(until<Date.now())blocked.delete(id);status.textContent="戰鬥中：依紅色區域與移動物體選路";const start=index++%route.length;let escaping=false;let candidates=Array.from({length:route.length},(_,i)=>(start+i)%route.length).filter(i=>!scores[i].unsafe&&!scores[i].crossesRed&&!blocked.has(pos+":"+route[i]));const forced=forceGearPickup&&!evadingRed&&!followLeader?scores.map((_,i)=>i).filter(i=>scores[i].walkable&&!scores[i].crossesRed&&scores[i].gear>0&&!blocked.has(pos+":"+route[i])):[];if(forced.length)candidates=forced;if(!candidates.length&&fresh){const open=scores.map((_,i)=>i).filter(i=>scores[i].walkable&&!scores[i].crossesRed);const clear=open.filter(i=>!scores[i].unsafe);const unblocked=open.filter(i=>!blocked.has(pos+":"+route[i]));candidates=clear.length?clear:unblocked.length?unblocked:open;escaping=candidates.length>0&&!clear.length}if(evadingRed){candidates=scores.map((_,i)=>i).filter(i=>scores[i].walkable&&scores[i].endClearance>originClearance);escaping=false}if(!candidates.length){previousDirection=null;status.textContent=fresh?"座標｜目前沒有可通行方向":"畫面｜沒有可走方向，請確認座標來源";return}const lowest=Math.min(...candidates.map(i=>scores[i].score));let viable=candidates.filter(i=>scores[i].score<=lowest+3);
+const endClearance=hazardClearance(zones,x,y);const checks=Math.max(1,Math.ceil(Math.hypot(x-px,y-py)/6));const crossesRed=Array.from({length:checks},(_,i)=>(i+1)/checks).some(f=>hazardClearance(zones,px+(x-px)*f,py+(y-py)*f)<=0);return {score,chest,loot,gear,endClearance,crossesRed,unsafe,walkable,uncertain:false,escapeCost:pressure-Math.min(150,clearance)*35}});if(scores){const pos=fresh?packet.player.map(Math.round).join(","):view.match(/\(\s*(-?\d+)\s*,\s*(-?\d+)\s*\)/)?.slice(1).join(",");if(pos&&pos===previousPosition&&previousDirection&&Date.now()-lastCoordinateAt>=800){const id=pos+":"+previousDirection;blocked.set(id,Date.now()+6500);still++}else{still=0}if(pos!==previousPosition||Date.now()-lastCoordinateAt>=800){previousPosition=pos;lastCoordinateAt=Date.now()}for(const [id,until] of blocked)if(until<Date.now())blocked.delete(id);status.textContent="戰鬥中：依紅色區域與移動物體選路";const start=index++%route.length;let escaping=false;let candidates=Array.from({length:route.length},(_,i)=>(start+i)%route.length).filter(i=>!scores[i].unsafe&&!scores[i].crossesRed&&!blocked.has(pos+":"+route[i]));const forced=forceGearPickup&&!evadingRed&&!followLeader?scores.map((_,i)=>i).filter(i=>scores[i].walkable&&!scores[i].crossesRed&&scores[i].gear>0&&!blocked.has(pos+":"+route[i])):[];if(forced.length)candidates=forced;if(!candidates.length&&fresh){const open=scores.map((_,i)=>i).filter(i=>scores[i].walkable&&!scores[i].crossesRed);const clear=open.filter(i=>!scores[i].unsafe);const unblocked=open.filter(i=>!blocked.has(pos+":"+route[i]));candidates=clear.length?clear:unblocked.length?unblocked:open;escaping=candidates.length>0&&!clear.length}if(evadingRed){candidates=scores.map((_,i)=>i).filter(i=>scores[i].walkable&&scores[i].endClearance>originClearance);escaping=false}if(!candidates.length){previousDirection=null;if(evadingRed){status.textContent="座標｜紅圈內，找不到脫離方向";return}status.textContent=fresh?"座標｜目前沒有可通行方向":"畫面｜沒有可走方向，請確認座標來源";return}const lowest=Math.min(...candidates.map(i=>scores[i].score));let viable=candidates.filter(i=>scores[i].score<=lowest+3);
 if (cleanup && !evadingRed && !escaping) {
   viable = viable.filter(i => scores[i].gear > 0);
   if (!viable.length) {
