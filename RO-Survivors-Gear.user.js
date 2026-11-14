@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 試用版
 // @namespace ro-survivors-helper
-// @version 0.8
+// @version 1.0
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @match https://ro-survivors.com/*
@@ -259,7 +259,7 @@ function mountGearAssistant() {
   const button = document.createElement("button");
   button.type = "button";
   const updateAssistantButton = running => {
-    button.textContent = "RO 練等助手 " + "Gear 試用版 0.8" + " · " + (running ? "啟動中" : "已關閉");
+    button.textContent = "RO 練等助手 " + "Gear V1.0" + " · " + (running ? "啟動中" : "已關閉");
     button.setAttribute("aria-pressed", String(running));
   };
   updateAssistantButton(false);
@@ -519,7 +519,7 @@ function mountGearAssistant() {
     coordinateStatus = "正在連線即時座標…";
     status.textContent = coordinateStatus;
     coordinateRequest = Promise.resolve()
-      .then(() => ({ok:false,error:"Gear 試用版未連接即時座標"}))
+      .then(() => ({ok:false,error:"Gear未連接即時座標"}))
       .then(result => {
         if (!result?.ok) throw new Error(result?.error || "擴充功能沒有回應");
         coordinateConnectedAt = Date.now();
