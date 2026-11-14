@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 試用版
 // @namespace ro-survivors-helper
-// @version 1.0
+// @version 1.1
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @match https://ro-survivors.com/*
@@ -259,7 +259,7 @@ function mountGearAssistant() {
   const button = document.createElement("button");
   button.type = "button";
   const updateAssistantButton = running => {
-    button.textContent = "RO 練等助手 " + "Gear V1.0" + " · " + (running ? "啟動中" : "已關閉");
+    button.textContent = "RO 練等助手 " + "Gear V1.1" + " · " + (running ? "啟動中" : "已關閉");
     button.setAttribute("aria-pressed", String(running));
   };
   updateAssistantButton(false);
@@ -1475,7 +1475,7 @@ updateAssistantButton(true);
   restore.textContent = "Ⅱ";
   restore.title = "放大 RO 助手";
   restore.setAttribute("aria-label", "放大 RO 助手");
-  restore.style.cssText = "display:none;width:28px;height:28px;border-radius:50%;padding:0;border:1px solid #949fb3;background:#d2d8e5;color:#173569;font:bold 13px/1 system-ui;cursor:pointer;touch-action:manipulation";
+  restore.style.cssText = "display:none;width:44px;height:44px;border-radius:50%;padding:0;border:1px solid #949fb3;background:#d2d8e5;color:#173569;font:bold 18px/1 system-ui;cursor:grab;touch-action:none;user-select:none";
   header.append(handle, collapse, minimize);
   panel.append(header, content, restore);
   document.body.append(panel, lootWindow);
@@ -1528,6 +1528,10 @@ updateAssistantButton(true);
   for (const [control,minimized] of [[minimize,true],[restore,false]]) {
     control.addEventListener("click", event => {
       event.stopPropagation();
+      if (!minimized && suppressRestoreClick && event.detail !== 0) {
+        suppressRestoreClick = false;
+        return;
+      }
       preference.minimized = minimized;
       showCollapsed();
       if (!minimized && Number.isFinite(preference.x) && Number.isFinite(preference.y)) movePanel(preference.x,preference.y);
@@ -1535,6 +1539,32 @@ updateAssistantButton(true);
       savePanel();
     });
   }
+  let suppressRestoreClick = false;
+  let iconDrag;
+  restore.addEventListener("pointerdown", event => {
+    if (event.button !== 0 || iconDrag) return;
+    suppressRestoreClick = false;
+    const {left,top} = panel.getBoundingClientRect();
+    iconDrag = {id:event.pointerId,x:event.clientX,y:event.clientY,left,top,moved:false};
+    restore.setPointerCapture(event.pointerId);
+    event.stopPropagation();
+  });
+  restore.addEventListener("pointermove", event => {
+    if (iconDrag?.id !== event.pointerId) return;
+    const dx = event.clientX - iconDrag.x;
+    const dy = event.clientY - iconDrag.y;
+    if (!iconDrag.moved && Math.hypot(dx,dy) < 6) return;
+    iconDrag.moved = true;
+    Object.assign(preference,movePanel(iconDrag.left + dx,iconDrag.top + dy));
+    event.stopPropagation();
+  });
+  const finishIconDrag = event => {
+    if (iconDrag?.id !== event.pointerId) return;
+    suppressRestoreClick = iconDrag.moved;
+    if (iconDrag.moved) savePanel();
+    iconDrag = undefined;
+  };
+  for (const type of ["pointerup","pointercancel","lostpointercapture"]) restore.addEventListener(type,finishIconDrag);
   let drag;
   handle.addEventListener("pointerdown", event => {
     if (event.button !== 0 || drag) return;
