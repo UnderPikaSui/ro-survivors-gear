@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 試用版
 // @namespace ro-survivors-helper
-// @version 2.0
+// @version 3.0
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @match https://ro-survivors.com/*
@@ -216,9 +216,29 @@ function locateBattleLoop(source) {
     if (!direction) setPhase("已讀到戰鬥物件，但找不到移動方向函式");
   }
   const defineProperty = Object.defineProperty;
+  const gpuWrappedGames = new WeakSet();
+  function wrapGearRendering(game) {
+    if (gpuWrappedGames.has(game)) return;
+    const render = game.renderWorld;
+    game.renderWorld = function(...args) {
+      const world = this.world3d;
+      if (document.documentElement?.dataset.roHelperGpuSaver !== "on" ||
+          typeof world?.render !== "function") return render.apply(this,args);
+      const original = Object.getOwnPropertyDescriptor(world,"render");
+      world.render = () => {};
+      try {
+        return render.apply(this,args);
+      } finally {
+        if (original) Object.defineProperty(world,"render",original);
+        else delete world.render;
+      }
+    };
+    gpuWrappedGames.add(game);
+  }
   function capturePlayer(target, key) {
     if (key === "player" && typeof target.renderWorld === "function") {
       active = target;
+      wrapGearRendering(target);
       setPhase("已讀到戰鬥物件");
     }
   }
@@ -259,7 +279,7 @@ function mountGearAssistant() {
   const button = document.createElement("button");
   button.type = "button";
   const updateAssistantButton = running => {
-    button.textContent = "RO 練等助手 " + "Gear V2.0" + " · " + (running ? "啟動中" : "已關閉");
+    button.textContent = "RO 練等助手 " + "Gear V3.0" + " · " + (running ? "啟動中" : "已關閉");
     button.setAttribute("aria-pressed", String(running));
   };
   updateAssistantButton(false);
@@ -1485,7 +1505,7 @@ updateAssistantButton(true);
   content.style.cssText = "padding:5px;max-width:260px;max-height:calc(100vh - 64px);overflow:auto";
   const actions = document.createElement("div");
   actions.style.cssText = "display:flex;flex-wrap:wrap;gap:4px";
-  for (const control of [button, movementToggle, gearMovementMode, lootButton, settings, treasureButton, difficultyButton, rollChoice, partyMode, rerollToggle, skillFocus.select, ...treasureFocus.map(choice => choice.select)]) {
+  for (const control of [button, gpuSaver, movementToggle, gearMovementMode, lootButton, settings, treasureButton, difficultyButton, rollChoice, partyMode, rerollToggle, skillFocus.select, ...treasureFocus.map(choice => choice.select)]) {
     control.style.cssText = "background:#234b96;color:white;padding:5px 7px;border-radius:5px;cursor:pointer";
     actions.append(control);
   }
