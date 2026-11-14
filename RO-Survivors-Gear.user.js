@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 試用版
 // @namespace ro-survivors-helper
-// @version 1.1
+// @version 2.0
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @match https://ro-survivors.com/*
@@ -259,7 +259,7 @@ function mountGearAssistant() {
   const button = document.createElement("button");
   button.type = "button";
   const updateAssistantButton = running => {
-    button.textContent = "RO 練等助手 " + "Gear V1.1" + " · " + (running ? "啟動中" : "已關閉");
+    button.textContent = "RO 練等助手 " + "Gear V2.0" + " · " + (running ? "啟動中" : "已關閉");
     button.setAttribute("aria-pressed", String(running));
   };
   updateAssistantButton(false);
@@ -535,19 +535,21 @@ function mountGearAssistant() {
   };
   share.onclick = () => connectCoordinates(true, true);
   const difficultyFields = [
-    ["count", "敵人數量", 300],
-    ["damage", "敵人傷害", 150],
-    ["hp", "敵人血量", 200],
-    ["speed", "敵人速度", 150],
-    ["events", "事件數量", 200]
+    ["count", "敵人數量", 350, 300],
+    ["damage", "敵人傷害", 175, 150],
+    ["hp", "敵人血量", 250, 200],
+    ["speed", "敵人速度", 175, 150],
+    ["events", "事件數量", 250, 200]
   ];
-  const getDifficulty = () => {
+  const difficultyKey = mode => "ro-helper-difficulty-" + mode;
+  const getDifficulty = mode => {
     let saved;
-    try { saved = JSON.parse(localStorage.getItem(settingKey("ro-helper-difficulty"))); } catch {}
+    try { saved = JSON.parse(localStorage.getItem(settingKey(difficultyKey(mode))) ?? localStorage.getItem(settingKey("ro-helper-difficulty"))); } catch {}
     if (!saved || typeof saved !== "object" || Array.isArray(saved)) return null;
-    return Object.fromEntries(difficultyFields.map(([key, , max]) => {
+    return Object.fromEntries(difficultyFields.map(([key, , soloMax, partyMax]) => {
+      const max = mode === "party" ? partyMax : soloMax;
       const value = Number(saved?.[key]);
-      return [key, Number.isFinite(value) && value >= 100 && value <= max ? Math.round(value / 5) * 5 : 100];
+      return [key, Number.isFinite(value) && value >= 100 ? Math.min(max, Math.round(value / 5) * 5) : 100];
     }));
   };
   const difficultyButton = document.createElement("button");
@@ -561,23 +563,41 @@ function mountGearAssistant() {
     form.method = "dialog";
     form.style.cssText = "display:grid;gap:10px;padding:16px";
     form.append("自動進場難度");
-    const saved = getDifficulty();
-    const inputs = difficultyFields.map(([key, name, max]) => {
+    const mode = document.createElement("select");
+    mode.setAttribute("aria-label","難度模式");
+    mode.append(new Option("單人","solo"),new Option("組隊","party"));
+    mode.value = partyMode.value === "off" ? "solo" : "party";
+    form.append(mode);
+    const drafts = new Map();
+    let displayed = mode.value;
+    const inputs = difficultyFields.map(([key, name]) => {
       const row = document.createElement("label");
       const input = document.createElement("input");
       const output = document.createElement("output");
       input.type = "range";
       input.min = 100;
-      input.max = max;
       input.step = 5;
-      input.value = saved?.[key] ?? 100;
       const update = () => { output.textContent = input.value + "%"; };
       input.oninput = update;
-      update();
       row.append(name + " ", input, output);
       form.append(row);
       return [key, input];
     });
+    const readInputs = () => Object.fromEntries(inputs.map(([key,input]) => [key,Number(input.value)]));
+    const loadInputs = () => {
+      const saved = drafts.get(displayed) ?? getDifficulty(displayed);
+      inputs.forEach(([key,input],index) => {
+        input.max = displayed === "party" ? difficultyFields[index][3] : difficultyFields[index][2];
+        input.value = saved?.[key] ?? 100;
+        input.oninput();
+      });
+    };
+    mode.onchange = () => {
+      drafts.set(displayed,readInputs());
+      displayed = mode.value;
+      loadInputs();
+    };
+    loadInputs();
     const save = document.createElement("button");
     save.textContent = "儲存";
     const cancel = document.createElement("button");
@@ -586,8 +606,8 @@ function mountGearAssistant() {
     cancel.onclick = () => dialog.close();
     form.onsubmit = event => {
       event.preventDefault();
-      writeSetting("ro-helper-difficulty", JSON.stringify(Object.fromEntries(
-        inputs.map(([key, input]) => [key, Number(input.value)]))));
+      drafts.set(displayed,readInputs());
+      for (const [kind,values] of drafts) writeSetting(difficultyKey(kind),JSON.stringify(values));
       status.textContent = "已儲存難度，下次出發時套用";
       dialog.close();
     };
@@ -607,11 +627,16 @@ function mountGearAssistant() {
     const missing = sliders.find(({input, output}) => !input || !output);
     if (missing) return "找不到難度欄位：" + missing.name;
     for (const {key, name, input, output} of sliders) {
-      input.value = String(saved[key] / 100);
+      const min = Number(input.min || 1);
+      const max = Number(input.max || saved[key] / 100);
+      const step = Number(input.step) || 0.05;
+      const value = Math.min(max,Math.max(min,saved[key] / 100));
+      const percent = Math.round(Math.min(max,min + Math.round((value-min)/step)*step)*100);
+      input.value = String(percent / 100);
       input.dispatchEvent(new Event("input", {bubbles:true}));
-      if (Math.round(Number(input.value) * 100) !== saved[key] ||
-          output.textContent.trim() !== saved[key] + "%") {
-        return "難度未套用：" + name + " " + saved[key] + "%";
+      if (Math.round(Number(input.value) * 100) !== percent ||
+          output.textContent.trim() !== percent + "%") {
+        return "難度未套用：" + name + " " + percent + "%";
       }
     }
     return "";
@@ -1226,7 +1251,7 @@ if (partyLeader && difficultyDialog && !proposal) {
   }
   return;
 }
-if(field){release();if(partyMember||partyLeader&&!proposal)return;if(last===field)return;const difficulty=getDifficulty();const difficultyError=applyDifficulty(difficultyDialog,difficulty);if(difficultyError){status.textContent=difficultyError;return}if(proposal){retriedSoloDialog=false;partyWaitingUntil=Date.now()+30000;status.textContent="已發起隊伍出發，等待隊員確認"}else status.textContent=difficulty?"已套用助手的難度設定，正在進場":"使用遊戲目前的難度，正在進場";click(field);return}const captain=byId("lobby-prompt");const stageCards=[...document.querySelectorAll("#stg-list .stg-card")].filter(e=>e.getClientRects().length&&getComputedStyle(e).visibility==="visible"&&!e.closest("[hidden],[inert],[aria-hidden=true]"));
+if(field){release();if(partyMember||partyLeader&&!proposal)return;if(last===field)return;const difficulty=getDifficulty(proposal?"party":"solo");const difficultyError=applyDifficulty(difficultyDialog,difficulty);if(difficultyError){status.textContent=difficultyError;return}if(proposal){retriedSoloDialog=false;partyWaitingUntil=Date.now()+30000;status.textContent="已發起隊伍出發，等待隊員確認"}else status.textContent=difficulty?"已套用助手的難度設定，正在進場":"使用遊戲目前的難度，正在進場";click(field);return}const captain=byId("lobby-prompt");const stageCards=[...document.querySelectorAll("#stg-list .stg-card")].filter(e=>e.getClientRects().length&&getComputedStyle(e).visibility==="visible"&&!e.closest("[hidden],[inert],[aria-hidden=true]"));
 const selectedStages = rotationStages();
 const repeats = repeatCount(stageRepeats.value);
 if (!selectedStages.includes(rotation.stage)) rotation = {stage: selectedStages[0], completed: 0};
