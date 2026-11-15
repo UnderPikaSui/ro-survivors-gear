@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 試用版
 // @namespace ro-survivors-helper
-// @version 21.0
+// @version 22.0
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @match https://ro-survivors.com/*
@@ -11,6 +11,76 @@
 // @unwrap
 // @noframes
 // ==/UserScript==
+(() => {
+  if (window.top !== window || window.__roHelperLobbyBridge) return;
+  window.__roHelperLobbyBridge = true;
+  const root = Object.prototype;
+  if (Object.getOwnPropertyDescriptor(root,"npcs")) return;
+  const define = Object.defineProperty;
+  let lobby, hooked = false, moveOwner, nextAttempt = 0;
+  function capture(candidate) {
+    if (hooked || typeof candidate?.addNpc !== "function" || typeof candidate?.moveTo !== "function") return;
+    const prototype = Object.getPrototypeOf(candidate);
+    const addNpc = prototype.addNpc;
+    if (typeof addNpc !== "function") return;
+    lobby = candidate;
+    define(prototype,"addNpc",{
+      configurable:true,writable:true,value:function (...args) {
+        lobby = this;
+        return addNpc.apply(this,args);
+      }
+    });
+    hooked = true;
+    delete root.npcs;
+    if (Object.defineProperty === watchDefinition) Object.defineProperty = define;
+  }
+  function watchDefinition(target,key,descriptor) {
+    const result = define(target,key,descriptor);
+    if (!hooked && key === "npcs" && Array.isArray(descriptor.value)) capture(target);
+    return result;
+  }
+  define(root,"npcs",{
+    configurable:true,
+    set(value) {
+      define(this,"npcs",{value,writable:true,enumerable:true,configurable:true});
+      if (Array.isArray(value)) capture(this);
+    }
+  });
+  Object.defineProperty = watchDefinition;
+  document.addEventListener("ro-helper-lobby-npc", event => {
+    const npcId = event.detail;
+    const dataset = document.documentElement.dataset;
+    if (npcId === "cancel") {
+      if (moveOwner && lobby && moveOwner.path === lobby.movePath && moveOwner.npc === lobby.talkTo) {
+        lobby.movePath = null;
+        lobby.talkTo = null;
+      }
+      moveOwner = undefined;
+      return;
+    }
+    if (npcId !== "captain" && npcId !== "festival") return;
+    if (!lobby?.player || !document.body?.classList.contains("in-lobby")) return;
+    if (lobby.menuOpen?.()) return;
+    const npc = lobby.npcs.find(item => item.id === npcId);
+    if (!npc) { dataset.roHelperLobbyStatus = "missing"; return; }
+    if (lobby.near === npc && lobby.prompt?.getClientRects().length) {
+      if (Date.now() < nextAttempt) return;
+      nextAttempt = Date.now()+500;
+      dataset.roHelperLobbyStatus = "talking";
+      lobby.prompt.click();
+      return;
+    }
+    if (lobby.talkTo === npc && lobby.movePath?.length) {
+      dataset.roHelperLobbyStatus = "moving";
+      return;
+    }
+    if (Date.now() < nextAttempt) return;
+    nextAttempt = Date.now()+1200;
+    lobby.moveTo(npc.x,npc.y);
+    moveOwner = {npc,path:lobby.movePath};
+    dataset.roHelperLobbyStatus = lobby.movePath?.length ? "moving" : "blocked";
+  });
+})();
 (() => {
   if (window.top !== window || window.__roGearCapture) return;
   window.__roGearCapture = true;
@@ -347,7 +417,7 @@ function mountGearAssistant() {
   const button = document.createElement("button");
   button.type = "button";
   const updateAssistantButton = running => {
-    button.textContent = "RO 練等助手 " + "Gear V21.0" + " · " + (running ? "啟動中" : "已關閉");
+    button.textContent = "RO 練等助手 " + "Gear V22.0" + " · " + (running ? "啟動中" : "已關閉");
     button.setAttribute("aria-pressed", String(running));
   };
   updateAssistantButton(false);
@@ -802,7 +872,10 @@ function mountGearAssistant() {
     return "";
   }
   const festivalStage = "燈籠節";
-  const festivalHostPrompt = /(?:節慶主持人|活動主持人|節日主持人|Festival Hostess|festival host|anfitriona|anfitriã)/i;
+  const festivalHostPrompt = /(?:與主持人交談|節慶主持人|活動主持人|節日主持人|Festival Hostess|festival host|anfitriona|anfitriã)/i;
+  function requestLobbyNpc(id) {
+    document.dispatchEvent(new CustomEvent("ro-helper-lobby-npc",{detail:id}));
+  }
   function selectImmediateLevelUps(dialog) {
     const immediate = dialog.querySelector("#npc-text .diff button[data-bank='0']");
     if (!immediate) return true;
@@ -1666,14 +1739,20 @@ if (!taiwanGame && stageName === festivalStage && !partyMember && !battleHud && 
   if (!difficultyDialog && !document.querySelector("#npc-dialog:not(.hidden)") &&
       !document.querySelector("#picker:not(.hidden)")) {
     release();
-    if (captain && festivalHostPrompt.test(label(captain))) {
-      if (last !== captain) click(captain);
-    } else {
-      last = undefined;
-      status.textContent = "燈籠節：請靠近廣場的節慶主持人";
-    }
+    if (captain && festivalHostPrompt.test(label(captain)) && last !== captain) click(captain);
+    else requestLobbyNpc("festival");
+    status.textContent = "燈籠節：前往節慶主持人";
     return;
   }
+}
+if (!partyMember && stageName && !battleHud && !result && !stageCards.length && !go &&
+    document.body.classList?.contains("in-lobby") && !document.querySelector("#npc-dialog:not(.hidden), #picker:not(.hidden), #stages:not(.hidden)")) {
+  release();
+  if (partyLeader && Date.now() < partyWaitingUntil) return;
+  if (captain && /(?:遠征隊長|與隊長交談|Hablar con el capitán|talk to the captain|Capitão)/i.test(label(captain)) && last !== captain) click(captain);
+  else requestLobbyNpc("captain");
+  status.textContent = "正在前往遠征隊長";
+  return;
 }
 if (!partyMember && stageCards.length && !stageName) {
   release();
@@ -1908,7 +1987,7 @@ if (a.loot !== b.loot) return a.loot > b.loot ? i : best;
 if (Math.abs(a.score-b.score) < 0.5 && (route[i] === previousDirection || route[best] === previousDirection)) {
   return route[i] === previousDirection ? i : best;
 }
-return a.score < b.score ? i : best});const chosen=scores[best];if(escaping){if(escapeDirection!==best||Date.now()>=escapeUntil){escapeDirection=best;escapeUntil=Date.now()+650}}else{escapeDirection=-1;escapeUntil=0}status.textContent=evadingRed?"座標｜閃避紅圈":usingMagnet?"清場收尾：改撿可到達的磁鐵":forced.length?"座標｜強制撿裝備／卡片":escaping?"座標｜走位：脫離怪群":cleanup?"清場收尾：撿取裝備與卡片":followLeader?"座標｜跟隨隊長":(fresh?"座標｜":"畫面｜")+(chosen.chest?"走位：靠近寶箱":chosen.loot?(pickup?.kind === "magnet" ? "走位：靠近磁鐵" : pickup?.kind === "ball" ? "走位：撿燈籠節扭蛋" : "走位：靠近掉落物"):"走位：巡找掉落物");held=route[best];previousDirection=held;if(still>=2)status.textContent="座標未變：換方向避開卡點";for(const key of held)send("keydown",key);clearTimeout(movePulse);movePulse=setTimeout(release,escaping?155:chosen.uncertain?80:145)}else{status.textContent="已暫停走位："+captureStatus+""}}else if(picking){status.textContent="偵測到升級，但找不到可選卡片"}return}previousPosition=null;previousDirection=null;escapeDirection=-1;escapeUntil=0;release();if(picking)status.textContent="選擇技能："+label(next).split(/\n/).slice(0,4).join(" ");if(next!==last||next===go||next===stage)click(next)},160);const stop=()=>{delete document.documentElement.dataset.roHelperBossCleanup;delete document.documentElement.dataset.roHelperSkipChest;if(sharedVideo){sharedVideo.srcObject.getTracks().forEach(track=>track.stop());sharedVideo=null}clearInterval(timer);clearTimeout(movePulse);release();rotationProgress.textContent="";window.removeEventListener("blur",release);
+return a.score < b.score ? i : best});const chosen=scores[best];if(escaping){if(escapeDirection!==best||Date.now()>=escapeUntil){escapeDirection=best;escapeUntil=Date.now()+650}}else{escapeDirection=-1;escapeUntil=0}status.textContent=evadingRed?"座標｜閃避紅圈":usingMagnet?"清場收尾：改撿可到達的磁鐵":forced.length?"座標｜強制撿裝備／卡片":escaping?"座標｜走位：脫離怪群":cleanup?"清場收尾：撿取裝備與卡片":followLeader?"座標｜跟隨隊長":(fresh?"座標｜":"畫面｜")+(chosen.chest?"走位：靠近寶箱":chosen.loot?(pickup?.kind === "magnet" ? "走位：靠近磁鐵" : pickup?.kind === "ball" ? "走位：撿燈籠節扭蛋" : "走位：靠近掉落物"):"走位：巡找掉落物");held=route[best];previousDirection=held;if(still>=2)status.textContent="座標未變：換方向避開卡點";for(const key of held)send("keydown",key);clearTimeout(movePulse);movePulse=setTimeout(release,escaping?155:chosen.uncertain?80:145)}else{status.textContent="已暫停走位："+captureStatus+""}}else if(picking){status.textContent="偵測到升級，但找不到可選卡片"}return}previousPosition=null;previousDirection=null;escapeDirection=-1;escapeUntil=0;release();if(picking)status.textContent="選擇技能："+label(next).split(/\n/).slice(0,4).join(" ");if(next!==last||next===go||next===stage)click(next)},160);const stop=()=>{requestLobbyNpc("cancel");delete document.documentElement.dataset.roHelperBossCleanup;delete document.documentElement.dataset.roHelperSkipChest;if(sharedVideo){sharedVideo.srcObject.getTracks().forEach(track=>track.stop());sharedVideo=null}clearInterval(timer);clearTimeout(movePulse);release();rotationProgress.textContent="";window.removeEventListener("blur",release);
   delete document.documentElement.dataset.roHelperFinishVictory;
   delete window[key];
   updateAssistantButton(false);
