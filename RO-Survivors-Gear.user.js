@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 試用版
 // @namespace ro-survivors-helper
-// @version 23.0
+// @version 24.0
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @match https://ro-survivors.com/*
@@ -11,6 +11,33 @@
 // @unwrap
 // @noframes
 // ==/UserScript==
+(() => {
+  if (window.top !== window) return;
+  const storage = window.localStorage;
+  const storagePrototype = Storage.prototype;
+  const get = storagePrototype.getItem;
+  const set = storagePrototype.setItem;
+  if (get.call(storage,"ro-helper-game-autologin") !== "off") return;
+  const account = "ro-survivors-session";
+  const guest = "ro-survivors-guest-session";
+  const international = location.hostname !== "ro.hans-webgametw.com";
+  let blocked = true;
+  function read(key) {
+    if (this === storage && blocked && (key === account || (international && key === guest))) return null;
+    return get.call(this,key);
+  }
+  function write(key,value) {
+    const result = set.call(this,key,value);
+    if (this === storage && (key === account || (international && key === guest))) {
+      blocked = false;
+      if (storagePrototype.getItem === read) storagePrototype.getItem = get;
+      if (storagePrototype.setItem === write) storagePrototype.setItem = set;
+    }
+    return result;
+  }
+  storagePrototype.getItem = read;
+  storagePrototype.setItem = write;
+})();
 (() => {
   if (window.top !== window || window.__roHelperLobbyBridge) return;
   window.__roHelperLobbyBridge = true;
@@ -459,7 +486,7 @@ function mountGearAssistant() {
   const button = document.createElement("button");
   button.type = "button";
   const updateAssistantButton = running => {
-    button.textContent = "RO 練等助手 " + "Gear V23.0" + " · " + (running ? "啟動中" : "已關閉");
+    button.textContent = "RO 練等助手 " + "Gear V24.0" + " · " + (running ? "啟動中" : "已關閉");
     button.setAttribute("aria-pressed", String(running));
   };
   updateAssistantButton(false);
@@ -467,6 +494,20 @@ function mountGearAssistant() {
   const status = document.createElement("div");
   status.style.cssText = "position:fixed;top:135px;right:12px;z-index:2147483647;background:#173569;color:white;padding:8px";
   status.textContent = "已載入，尚未啟動";
+  const autoLoginToggle = document.createElement("button");
+  autoLoginToggle.type = "button";
+  const showAutoLoginSetting = () => {
+    const enabled = localStorage.getItem("ro-helper-game-autologin") !== "off";
+    autoLoginToggle.textContent = "遊戲自動登入：" + (enabled ? "開" : "關");
+    autoLoginToggle.setAttribute("aria-pressed",String(enabled));
+  };
+  autoLoginToggle.addEventListener("click",() => {
+    const enabled = localStorage.getItem("ro-helper-game-autologin") === "off";
+    localStorage.setItem("ro-helper-game-autologin",enabled ? "on" : "off");
+    showAutoLoginSetting();
+    status.textContent = enabled ? "下次重新整理時自動登入" : "下次重新整理時停止自動登入";
+  });
+  showAutoLoginSetting();
   const accountScope = () => {
     for (const [sessionKey, kind] of [
       ["ro-survivors-session", "account"],
@@ -2130,7 +2171,7 @@ updateAssistantButton(true);
   content.style.cssText = "padding:5px;max-width:260px;max-height:calc(100vh - 64px);overflow:auto";
   const actions = document.createElement("div");
   actions.style.cssText = "display:flex;flex-wrap:wrap;gap:4px";
-  for (const control of [button, gpuSaver, movementToggle, gearMovementMode, lootButton, settings, treasureButton, difficultyButton, chestMode, magnetSetting, rollChoice, partyMode, rerollToggle, skillFocus.select, ...treasureFocus.map(choice => choice.select)]) {
+  for (const control of [button, gpuSaver, autoLoginToggle, movementToggle, gearMovementMode, lootButton, settings, treasureButton, difficultyButton, chestMode, magnetSetting, rollChoice, partyMode, rerollToggle, skillFocus.select, ...treasureFocus.map(choice => choice.select)]) {
     control.style.cssText = "background:#234b96;color:white;padding:5px 7px;border-radius:5px;cursor:pointer";
     actions.append(control);
   }
