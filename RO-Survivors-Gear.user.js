@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 試用版
 // @namespace ro-survivors-helper
-// @version 20.1
+// @version 21.0
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @match https://ro-survivors.com/*
@@ -47,11 +47,12 @@ function victoryCleanup(game, dataset, now, emptySince, internationalEdition) {
     emptySince.delete(game);
     return null;
   }
-  if (internationalEdition && game.coop) {
+  const seasonalBalls = internationalEdition && game.stageId === "louyang";
+  if (internationalEdition && game.coop && !seasonalBalls) {
     emptySince.delete(game);
     return {gear: [], canFinish: false, ready: false, deferredPartyLoot: true};
   }
-  const gear = game.pickups.filter(item => !item.dead && (item.kind === "loot" || item.kind === "card"));
+  const gear = game.pickups.filter(item => !item.dead && (item.kind === "loot" || item.kind === "card" || (seasonalBalls && item.kind === "ball")));
   if (gear.length) emptySince.delete(game);
   else if (!emptySince.has(game)) emptySince.set(game, now);
   const ready = !gear.length && now - emptySince.get(game) >= 1000;
@@ -98,7 +99,7 @@ function watchLocalPickups(game, dataset, watched) {
 
 function readGearWaypoint(game, cleanup, cache, now, magnet = false) {
   const {x,y} = game.player;
-  const isGear = item => !item.dead && (magnet ? item.kind === "magnet" : item.kind === "loot" || item.kind === "card");
+  const isGear = item => !item.dead && (magnet ? item.kind === "magnet" : item.kind === "loot" || item.kind === "card" || (cleanup && game.stageId === "louyang" && item.kind === "ball"));
   const distance = item => Math.hypot(item.x-x,item.y-y);
   const previous = cache.get(game);
   if (previous && now < previous.retryAt) {
@@ -346,7 +347,7 @@ function mountGearAssistant() {
   const button = document.createElement("button");
   button.type = "button";
   const updateAssistantButton = running => {
-    button.textContent = "RO 練等助手 " + "Gear V20.1" + " · " + (running ? "啟動中" : "已關閉");
+    button.textContent = "RO 練等助手 " + "Gear V21.0" + " · " + (running ? "啟動中" : "已關閉");
     button.setAttribute("aria-pressed", String(running));
   };
   updateAssistantButton(false);
@@ -800,6 +801,15 @@ function mountGearAssistant() {
     }
     return "";
   }
+  const festivalStage = "燈籠節";
+  const festivalHostPrompt = /(?:節慶主持人|活動主持人|節日主持人|Festival Hostess|festival host|anfitriona|anfitriã)/i;
+  function selectImmediateLevelUps(dialog) {
+    const immediate = dialog.querySelector("#npc-text .diff button[data-bank='0']");
+    if (!immediate) return true;
+    if (immediate.disabled) return false;
+    if (!immediate.classList.contains("active")) immediate.click();
+    return immediate.classList.contains("active");
+  }
   const knownStages = ["普隆德拉原野", "普隆德拉地下水道", "失事輪", "柏伊亞嵐島", "斐揚森林", "斐揚洞穴", "普隆德拉城"];
   const stageNameOf = card => card.querySelector(".stg-card-info b")?.textContent.trim() ||
     knownStages.find(name => card.textContent.includes(name)) || "";
@@ -902,7 +912,7 @@ function mountGearAssistant() {
   function refreshStageChoices() {
     const saved = readSetting("ro-helper-stage") ?? sessionStorage.getItem("ro-helper-stage");
     const checked = rotationStages();
-    const names = [...new Set([...knownStages, ...(taiwanGame ? ["迷宮森林"] : []), ...readNames("ro-helper-seen-stages"), ...checked,
+    const names = [...new Set([...knownStages, ...(taiwanGame ? ["迷宮森林"] : [festivalStage]), ...readNames("ro-helper-seen-stages"), ...checked,
       ...[saved].filter(name => name && name !== highestStageMode)])];
     fixedStage.replaceChildren(new Option("請選擇關卡", ""), ...names.map(name => new Option(name, name)));
     fixedStage.value = saved === highestStageMode ? "" : saved || "";
@@ -1005,20 +1015,22 @@ function mountGearAssistant() {
         if (kind === "loot" || kind === "card" || (kind === "chest" && !affordable)) continue;
         const key = keyOf(drop);
         if (skipped.has(key)) continue;
-        const aimY = kind === "chest" ? y - 20 : y;
+        const aimY = kind === "chest" || kind === "ball" ? y - 20 : y;
         const distance = Math.hypot(x-px,aimY-py);
         if (distance <= 480) choices.push({key,kind,x,y:aimY,distance});
       }
       const current = choices.find(choice => choice.key === target?.key);
+      const ballVisible = choices.some(choice => choice.kind === "ball");
       if (current) {
         if (current.distance < target.best - 6) {
           target.best = current.distance;
           target.progressAt = now;
         }
-        if (now - target.progressAt < 1100) return current;
-        skipped.set(current.key,now+5000);
+        if (now - target.progressAt >= 1100) skipped.set(current.key,now+5000);
+        else if (!ballVisible || current.kind === "ball") return current;
       }
       const next = choices.filter(choice => !skipped.has(choice.key)).sort((a,b) =>
+        Number(b.kind === "ball") - Number(a.kind === "ball") ||
         Number(b.kind === "magnet") - Number(a.kind === "magnet") || Number(b.kind === "chest") - Number(a.kind === "chest") || a.distance-b.distance)[0];
       target = next && {key:next.key,best:next.distance,progressAt:now};
       return next ?? null;
@@ -1619,7 +1631,7 @@ if (partyLeader && difficultyDialog && !proposal) {
   }
   return;
 }
-if(field){release();if(partyMember||partyLeader&&!proposal)return;if(last===field)return;readDifficultyLimits(difficultyDialog);const difficulty=getDifficulty(proposal?"party":"solo");const difficultyError=applyDifficulty(difficultyDialog,difficulty);if(difficultyError){status.textContent=difficultyError;return}if(proposal){retriedSoloDialog=false;partyWaitingUntil=Date.now()+30000;status.textContent="已發起隊伍出發，等待隊員確認"}else status.textContent=difficulty?"已套用助手的難度設定，正在進場":"使用遊戲目前的難度，正在進場";click(field);return}const captain=byId("lobby-prompt");const stageCards=[...document.querySelectorAll("#stg-list .stg-card")].filter(e=>e.getClientRects().length&&getComputedStyle(e).visibility==="visible"&&!e.closest("[hidden],[inert],[aria-hidden=true]"));
+if(field){release();if(partyMember||partyLeader&&!proposal)return;if(last===field)return;readDifficultyLimits(difficultyDialog);const difficulty=getDifficulty(proposal?"party":"solo");const bankChoice=!taiwanGame&&difficultyDialog.querySelector("#npc-text .diff [data-bank]");if(bankChoice&&!selectImmediateLevelUps(difficultyDialog)){status.textContent="等待選擇立即升級";return}const seasonal=bankChoice&&!difficultyDialog.querySelector("#npc-text .diff input[data-key]");const difficultyError=seasonal?"":applyDifficulty(difficultyDialog,difficulty);if(difficultyError){status.textContent=difficultyError;return}if(proposal){retriedSoloDialog=false;partyWaitingUntil=Date.now()+30000;status.textContent="已發起隊伍出發，等待隊員確認"}else status.textContent=seasonal?"燈籠節：立即升級，正在進場":difficulty?"已套用助手的難度設定，正在進場":"使用遊戲目前的難度，正在進場";click(field);return}const captain=byId("lobby-prompt");const stageCards=[...document.querySelectorAll("#stg-list .stg-card")].filter(e=>e.getClientRects().length&&getComputedStyle(e).visibility==="visible"&&!e.closest("[hidden],[inert],[aria-hidden=true]"));
 const selectedStages = rotationStages();
 const repeats = repeatCount(stageRepeats.value);
 if (!selectedStages.includes(rotation.stage)) rotation = {stage: selectedStages[0], completed: 0};
@@ -1637,6 +1649,31 @@ if (stageMode.value === "rotation") {
   rotationProgress.textContent = rotation.stage
     ? rotation.stage + " · 已完成 " + rotation.completed + " / " + repeats
     : "請勾選循環關卡";
+}
+if (!taiwanGame && stageName === festivalStage && !partyMember && !battleHud && !result) {
+  if (partyLeader && Date.now() < partyWaitingUntil) { release(); return; }
+  const play = byId("festival-play");
+  if (play) {
+    release();
+    if (last !== play) {
+      departing = true;
+      rotationRun = stageMode.value === "rotation" ? {stage:festivalStage} : undefined;
+      status.textContent = "燈籠節：正在開啟出發設定";
+      click(play);
+    }
+    return;
+  }
+  if (!difficultyDialog && !document.querySelector("#npc-dialog:not(.hidden)") &&
+      !document.querySelector("#picker:not(.hidden)")) {
+    release();
+    if (captain && festivalHostPrompt.test(label(captain))) {
+      if (last !== captain) click(captain);
+    } else {
+      last = undefined;
+      status.textContent = "燈籠節：請靠近廣場的節慶主持人";
+    }
+    return;
+  }
 }
 if (!partyMember && stageCards.length && !stageName) {
   release();
@@ -1871,7 +1908,7 @@ if (a.loot !== b.loot) return a.loot > b.loot ? i : best;
 if (Math.abs(a.score-b.score) < 0.5 && (route[i] === previousDirection || route[best] === previousDirection)) {
   return route[i] === previousDirection ? i : best;
 }
-return a.score < b.score ? i : best});const chosen=scores[best];if(escaping){if(escapeDirection!==best||Date.now()>=escapeUntil){escapeDirection=best;escapeUntil=Date.now()+650}}else{escapeDirection=-1;escapeUntil=0}status.textContent=evadingRed?"座標｜閃避紅圈":usingMagnet?"清場收尾：改撿可到達的磁鐵":forced.length?"座標｜強制撿裝備／卡片":escaping?"座標｜走位：脫離怪群":cleanup?"清場收尾：撿取裝備與卡片":followLeader?"座標｜跟隨隊長":(fresh?"座標｜":"畫面｜")+(chosen.chest?"走位：靠近寶箱":chosen.loot?(pickup?.kind === "magnet" ? "走位：靠近磁鐵" : "走位：靠近掉落物"):"走位：巡找掉落物");held=route[best];previousDirection=held;if(still>=2)status.textContent="座標未變：換方向避開卡點";for(const key of held)send("keydown",key);clearTimeout(movePulse);movePulse=setTimeout(release,escaping?155:chosen.uncertain?80:145)}else{status.textContent="已暫停走位："+captureStatus+""}}else if(picking){status.textContent="偵測到升級，但找不到可選卡片"}return}previousPosition=null;previousDirection=null;escapeDirection=-1;escapeUntil=0;release();if(picking)status.textContent="選擇技能："+label(next).split(/\n/).slice(0,4).join(" ");if(next!==last||next===go||next===stage)click(next)},160);const stop=()=>{delete document.documentElement.dataset.roHelperBossCleanup;delete document.documentElement.dataset.roHelperSkipChest;if(sharedVideo){sharedVideo.srcObject.getTracks().forEach(track=>track.stop());sharedVideo=null}clearInterval(timer);clearTimeout(movePulse);release();rotationProgress.textContent="";window.removeEventListener("blur",release);
+return a.score < b.score ? i : best});const chosen=scores[best];if(escaping){if(escapeDirection!==best||Date.now()>=escapeUntil){escapeDirection=best;escapeUntil=Date.now()+650}}else{escapeDirection=-1;escapeUntil=0}status.textContent=evadingRed?"座標｜閃避紅圈":usingMagnet?"清場收尾：改撿可到達的磁鐵":forced.length?"座標｜強制撿裝備／卡片":escaping?"座標｜走位：脫離怪群":cleanup?"清場收尾：撿取裝備與卡片":followLeader?"座標｜跟隨隊長":(fresh?"座標｜":"畫面｜")+(chosen.chest?"走位：靠近寶箱":chosen.loot?(pickup?.kind === "magnet" ? "走位：靠近磁鐵" : pickup?.kind === "ball" ? "走位：撿燈籠節扭蛋" : "走位：靠近掉落物"):"走位：巡找掉落物");held=route[best];previousDirection=held;if(still>=2)status.textContent="座標未變：換方向避開卡點";for(const key of held)send("keydown",key);clearTimeout(movePulse);movePulse=setTimeout(release,escaping?155:chosen.uncertain?80:145)}else{status.textContent="已暫停走位："+captureStatus+""}}else if(picking){status.textContent="偵測到升級，但找不到可選卡片"}return}previousPosition=null;previousDirection=null;escapeDirection=-1;escapeUntil=0;release();if(picking)status.textContent="選擇技能："+label(next).split(/\n/).slice(0,4).join(" ");if(next!==last||next===go||next===stage)click(next)},160);const stop=()=>{delete document.documentElement.dataset.roHelperBossCleanup;delete document.documentElement.dataset.roHelperSkipChest;if(sharedVideo){sharedVideo.srcObject.getTracks().forEach(track=>track.stop());sharedVideo=null}clearInterval(timer);clearTimeout(movePulse);release();rotationProgress.textContent="";window.removeEventListener("blur",release);
   delete document.documentElement.dataset.roHelperFinishVictory;
   delete window[key];
   updateAssistantButton(false);
