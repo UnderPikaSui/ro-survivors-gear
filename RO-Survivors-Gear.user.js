@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 試用版
 // @namespace ro-survivors-helper
-// @version 22.0
+// @version 23.0
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @match https://ro-survivors.com/*
@@ -110,6 +110,47 @@
   return hasPosition(point)
     ? {leader: [point.x, point.y], leaderState: "ready"}
     : {leader: null, leaderState: "missing"};
+}
+
+function sampleEnemyShots(game, cache) {
+  if (typeof game.enemyArrow !== "function" || typeof game.addFx !== "function") return [];
+  let shots = cache.get(game);
+  if (!shots) {
+    shots = new Map();
+    cache.set(game,shots);
+    const fire = game.enemyArrow;
+    game.enemyArrow = function (enemy,x,y,speed,range,...rest) {
+      const dx = x-enemy?.x, dy = y-enemy?.y;
+      const length = Math.hypot(dx,dy);
+      if (!length || !Number.isFinite(speed) || speed <= 0 || !Number.isFinite(range)) {
+        return fire.call(this,enemy,x,y,speed,range,...rest);
+      }
+      const add = this.addFx;
+      const own = Object.getOwnPropertyDescriptor(this,"addFx");
+      this.addFx = function (effect,...args) {
+        if (effect?.anchor && typeof effect.update === "function") {
+          shots.set(effect,{x:enemy.x,y:enemy.y,vx:dx/length*speed,vy:dy/length*speed,range,speed});
+        }
+        return add.call(this,effect,...args);
+      };
+      try { return fire.call(this,enemy,x,y,speed,range,...rest); }
+      finally {
+        if (own) Object.defineProperty(this,"addFx",own);
+        else delete this.addFx;
+      }
+    };
+  }
+  if (!shots.size) return [];
+  const active = new Set(game.fx);
+  const result = [];
+  for (const [effect,shot] of shots) {
+    if (!active.has(effect)) { shots.delete(effect); continue; }
+    const {x,y} = effect.anchor;
+    if (Math.hypot(x-game.player.x,y-game.player.y)>680) continue;
+    const remaining = (shot.range-Math.hypot(x-shot.x,y-shot.y))/shot.speed;
+    if (remaining>0) result.push([x,y,shot.vx,shot.vy,remaining]);
+  }
+  return result;
 }
 
 function victoryCleanup(game, dataset, now, emptySince, internationalEdition) {
@@ -303,6 +344,7 @@ function locateBattleLoop(source) {
         };
   const victoryEmptySince = new WeakMap();
   const gearPaths = new WeakMap();
+        const enemyShotCache = new WeakMap();
         const magnetPaths = new WeakMap();
         const pickupWatch = new WeakMap();
   const lootRunIds = new WeakMap();
@@ -405,7 +447,7 @@ function locateBattleLoop(source) {
     }
     readHazards(z);
     if (!direction) return;
-    try { (() => { const root = document.documentElement; if (!z?.player || performance.now() - Number(root.dataset.roHelperLast || 0) < 100) return false; const {x,y} = z.player; const partyLeader = readPartyLeader(z, performance.now()); const cleanup = victoryCleanup(z,root.dataset,Date.now(),victoryEmptySince,location.hostname !== "ro.hans-webgametw.com"); const lastMagnetAt = watchLocalPickups(z,root.dataset,pickupWatch)?.lastMagnetAt ?? 0; const gearWaypoint = readGearWaypoint(z,cleanup || root.dataset.roHelperBossCleanup==='on',gearPaths,performance.now()); const magnetWaypoint = (cleanup || root.dataset.roHelperBossCleanup==='on') && z.pickups.some(e=>!e.dead&&(e.kind==='loot'||e.kind==='card')) ? readGearWaypoint(z,true,magnetPaths,performance.now(),true) : null; const waypoint = gearWaypoint || magnetWaypoint; const reach = waypoint ? Math.max(24,Math.min(60,Math.hypot(waypoint.x-x,waypoint.y-y))) : 60; const routes = [[1,0],[0,1],[-1,0],[0,-1],[1,-1],[1,1],[-1,1],[-1,-1]].map(([dx,dy]) => { const length=Math.hypot(dx,dy); const [vx,vy]=direction(dx/length,dy/length); const clearAt = length => [.2,.4,.6,.8,1].every(fraction=>{const step=length*fraction;const tx=x+vx*step,ty=y+vy*step;return tx>=z.bounds.x0&&tx<=z.bounds.x1&&ty>=z.bounds.y0&&ty<=z.bounds.y1&&(!z.walk||z.walk.walkable(tx,ty))});const distance = [reach,reach/2,reach/4].find(clearAt) || reach; return [x+vx*distance,y+vy*distance,clearAt(distance)] }); const nearby=e=>!e.dead&&Math.hypot(e.x-x,e.y-y)<520; root.dataset.roHelperLive=JSON.stringify({at:Date.now(),battleSeconds:z.time,runBaseExp:z.endless ? null : z.charExp?.base,bossFarm:{gear:root.dataset.roHelperBossCleanup==='on'?z.pickups.filter(e=>!e.dead&&(e.kind==='loot'||e.kind==='card')).map(e=>[e.kind,e.x,e.y]):null,solo:!z.coop&&!z.story&&!z.endless,playing:z.state==='playing',bosses:(z.bosses||[]).filter(e=>e.def?.boss).map(e=>[e.def.id,e.def.name]),kills:Object.fromEntries((z.script?.bosses||[]).map(e=>[e.id,z.killsBy?.get(e.id)||0])),maze:z.stageId==='maze'?(z.script?.bosses||[]).map(e=>[e.id,e.t]):[]},lastMagnetAt,lootLog:lootSnapshot(z),player:[x,y],...partyLeader,cleanup,gearWaypoint,magnetWaypoint,routes,zeny:z.zeny,chestCost:z.chestCost(),hazards:readHazards(z),bell:readBell(z),enemies:z.enemies.filter(nearby).map(e=>[e.x,e.y]),drops:z.pickups.filter(e=>!e.dead&&Math.hypot(e.x-x,e.y-y)<(e.kind==='loot'||e.kind==='card'?800:520)).map(e=>[e.kind,e.x,e.y])});root.dataset.roHelperLast=String(performance.now());return false })(); setPhase(""); delete document.documentElement.dataset.roHelperError; } catch (error) {
+    try { (() => { const root = document.documentElement; if (!z?.player || performance.now() - Number(root.dataset.roHelperLast || 0) < 100) return false; const {x,y} = z.player; const partyLeader = readPartyLeader(z, performance.now()); const cleanup = victoryCleanup(z,root.dataset,Date.now(),victoryEmptySince,location.hostname !== "ro.hans-webgametw.com"); const lastMagnetAt = watchLocalPickups(z,root.dataset,pickupWatch)?.lastMagnetAt ?? 0; const gearWaypoint = readGearWaypoint(z,cleanup || root.dataset.roHelperBossCleanup==='on',gearPaths,performance.now()); const magnetWaypoint = (cleanup || root.dataset.roHelperBossCleanup==='on') && z.pickups.some(e=>!e.dead&&(e.kind==='loot'||e.kind==='card')) ? readGearWaypoint(z,true,magnetPaths,performance.now(),true) : null; const waypoint = gearWaypoint || magnetWaypoint; const reach = waypoint ? Math.max(24,Math.min(60,Math.hypot(waypoint.x-x,waypoint.y-y))) : 60; const routes = [[1,0],[0,1],[-1,0],[0,-1],[1,-1],[1,1],[-1,1],[-1,-1]].map(([dx,dy]) => { const length=Math.hypot(dx,dy); const [vx,vy]=direction(dx/length,dy/length); const clearAt = length => [.2,.4,.6,.8,1].every(fraction=>{const step=length*fraction;const tx=x+vx*step,ty=y+vy*step;return tx>=z.bounds.x0&&tx<=z.bounds.x1&&ty>=z.bounds.y0&&ty<=z.bounds.y1&&(!z.walk||z.walk.walkable(tx,ty))});const distance = [reach,reach/2,reach/4].find(clearAt) || reach; return [x+vx*distance,y+vy*distance,clearAt(distance)] }); const nearby=e=>!e.dead&&Math.hypot(e.x-x,e.y-y)<520; root.dataset.roHelperLive=JSON.stringify({at:Date.now(),battleSeconds:z.time,runBaseExp:z.endless ? null : z.charExp?.base,bossFarm:{gear:root.dataset.roHelperBossCleanup==='on'?z.pickups.filter(e=>!e.dead&&(e.kind==='loot'||e.kind==='card')).map(e=>[e.kind,e.x,e.y]):null,solo:!z.coop&&!z.story&&!z.endless,playing:z.state==='playing',bosses:(z.bosses||[]).filter(e=>e.def?.boss).map(e=>[e.def.id,e.def.name]),kills:Object.fromEntries((z.script?.bosses||[]).map(e=>[e.id,z.killsBy?.get(e.id)||0])),maze:z.stageId==='maze'?(z.script?.bosses||[]).map(e=>[e.id,e.t]):[]},lastMagnetAt,lootLog:lootSnapshot(z),player:[x,y],...partyLeader,cleanup,gearWaypoint,magnetWaypoint,routes,zeny:z.zeny,chestCost:z.chestCost(),hazards:readHazards(z),enemyShots:sampleEnemyShots(z,enemyShotCache),bell:readBell(z),enemies:z.enemies.filter(nearby).map(e=>[e.x,e.y]),drops:z.pickups.filter(e=>!e.dead&&Math.hypot(e.x-x,e.y-y)<(e.kind==='loot'||e.kind==='card'?800:520)).map(e=>[e.kind,e.x,e.y])});root.dataset.roHelperLast=String(performance.now());return false })(); setPhase(""); delete document.documentElement.dataset.roHelperError; } catch (error) {
       document.documentElement.dataset.roHelperError = error.message;
     }
   },100);
@@ -417,7 +459,7 @@ function mountGearAssistant() {
   const button = document.createElement("button");
   button.type = "button";
   const updateAssistantButton = running => {
-    button.textContent = "RO 練等助手 " + "Gear V22.0" + " · " + (running ? "啟動中" : "已關閉");
+    button.textContent = "RO 練等助手 " + "Gear V23.0" + " · " + (running ? "啟動中" : "已關閉");
     button.setAttribute("aria-pressed", String(running));
   };
   updateAssistantButton(false);
@@ -1183,6 +1225,42 @@ function mountGearAssistant() {
       return true;
     };
   };
+  function shotClearance(shots, [px,py], [x,y], age) {
+    const dx = x-px, dy = y-py;
+    const travelTime = Math.max(0.04,Math.hypot(dx,dy)/240);
+    let clearance = Infinity;
+    for (const [sx,sy,vx,vy,life] of shots) {
+      const duration = Math.min(0.34,life-age);
+      if (duration <= 0) continue;
+      const rx = sx+vx*age-px, ry = sy+vy*age-py;
+      const approach = (a,b,u,v,limit) => {
+        const t = Math.max(0,Math.min(limit,-(a*u+b*v)/(u*u+v*v||1)));
+        return Math.hypot(a+u*t,b+v*t);
+      };
+      clearance = Math.min(clearance,approach(rx,ry,vx-dx/travelTime,vy-dy/travelTime,Math.min(duration,travelTime)));
+      if (duration>travelTime) clearance = Math.min(clearance,
+        approach(rx+vx*travelTime-dx,ry+vy*travelTime-dy,vx,vy,duration-travelTime));
+    }
+    return clearance;
+  }
+  function projectileDodge(packet, zones, age, planned = -1) {
+    const shots = packet.enemyShots;
+    if (!shots?.length) return null;
+    const player = packet.player;
+    const origin = shotClearance(shots,player,player,age);
+    const chosen = planned < 0 ? origin : shotClearance(shots,player,packet.routes[planned],age);
+    if (chosen >= 37) return null;
+    let best = -1, bestScore = origin >= 37 ? 37 : origin-10;
+    for (const [i,[x,y,walkable]] of packet.routes.entries()) {
+      if (!walkable) continue;
+      if ([.2,.4,.6,.8,1].some(f=>hazardClearance(zones,player[0]+(x-player[0])*f,player[1]+(y-player[1])*f)<=0)) continue;
+      const monsterDistance = (packet.enemies || []).reduce((nearest,[ex,ey])=>Math.min(nearest,Math.hypot(ex-x,ey-y)),Infinity);
+      const clearance = shotClearance(shots,player,[x,y],age);
+      const score = Math.min(80,clearance)-Math.max(0,50-monsterDistance);
+      if (score > bestScore) { best = i; bestScore = score; }
+    }
+    return best;
+  }
   const hazardClearance = (zones, x, y) => {
     let clearance = Infinity;
     for (const [shape, cx, cy, width, height, angle, inner] of zones) {
@@ -1874,6 +1952,21 @@ return;
   status.textContent = "Gear｜自動巡走";
   return;
 }retriedCoordinates=false;const ignoreMonsterCollision=forceGearPickup&&collisionMode.value==="always";const zones=Array.isArray(packet.hazards)?packet.hazards:[];const shelter=bellDirection(packet,zones);if(shelter!==null){status.textContent=shelter<0?"座標｜留在金鐘安全區":"座標｜前往金鐘安全區";if(shelter>=0){held=route[shelter];for(const key of held)send("keydown",key);clearTimeout(movePulse);movePulse=setTimeout(release,145)}return}const originClearance=hazardClearance(zones,...packet.player);const evadingRed=originClearance<=0;
+const shotAge=Math.max(0,Math.min(.18,(Date.now()-packet.at)/1000));
+const sidestep = direction => {
+  status.textContent = "座標｜閃避敵方投擲物";
+  previousDirection = null;
+  if (direction < 0) return;
+  held = route[direction];
+  previousDirection = held;
+  for (const key of held) send("keydown",key);
+  clearTimeout(movePulse);
+  movePulse = setTimeout(release,145);
+};
+if (!evadingRed) {
+  const dodge = projectileDodge(packet,zones,shotAge);
+  if (dodge !== null && dodge >= 0) { sidestep(dodge); return; }
+}
 const bossGear = document.documentElement.dataset.roHelperBossCleanup === "on" ? packet.bossFarm?.gear : null;
 const cleanup = Array.isArray(bossGear) ? {gear:bossGear,bossFarm:true,canFinish:false} : packet.cleanup;
 const leader = !cleanup && followLeader && Array.isArray(packet.leader) && packet.leader.length === 2 &&
@@ -1987,7 +2080,11 @@ if (a.loot !== b.loot) return a.loot > b.loot ? i : best;
 if (Math.abs(a.score-b.score) < 0.5 && (route[i] === previousDirection || route[best] === previousDirection)) {
   return route[i] === previousDirection ? i : best;
 }
-return a.score < b.score ? i : best});const chosen=scores[best];if(escaping){if(escapeDirection!==best||Date.now()>=escapeUntil){escapeDirection=best;escapeUntil=Date.now()+650}}else{escapeDirection=-1;escapeUntil=0}status.textContent=evadingRed?"座標｜閃避紅圈":usingMagnet?"清場收尾：改撿可到達的磁鐵":forced.length?"座標｜強制撿裝備／卡片":escaping?"座標｜走位：脫離怪群":cleanup?"清場收尾：撿取裝備與卡片":followLeader?"座標｜跟隨隊長":(fresh?"座標｜":"畫面｜")+(chosen.chest?"走位：靠近寶箱":chosen.loot?(pickup?.kind === "magnet" ? "走位：靠近磁鐵" : pickup?.kind === "ball" ? "走位：撿燈籠節扭蛋" : "走位：靠近掉落物"):"走位：巡找掉落物");held=route[best];previousDirection=held;if(still>=2)status.textContent="座標未變：換方向避開卡點";for(const key of held)send("keydown",key);clearTimeout(movePulse);movePulse=setTimeout(release,escaping?155:chosen.uncertain?80:145)}else{status.textContent="已暫停走位："+captureStatus+""}}else if(picking){status.textContent="偵測到升級，但找不到可選卡片"}return}previousPosition=null;previousDirection=null;escapeDirection=-1;escapeUntil=0;release();if(picking)status.textContent="選擇技能："+label(next).split(/\n/).slice(0,4).join(" ");if(next!==last||next===go||next===stage)click(next)},160);const stop=()=>{requestLobbyNpc("cancel");delete document.documentElement.dataset.roHelperBossCleanup;delete document.documentElement.dataset.roHelperSkipChest;if(sharedVideo){sharedVideo.srcObject.getTracks().forEach(track=>track.stop());sharedVideo=null}clearInterval(timer);clearTimeout(movePulse);release();rotationProgress.textContent="";window.removeEventListener("blur",release);
+return a.score < b.score ? i : best});const chosen=scores[best];
+if (!evadingRed) {
+  const dodge = projectileDodge(packet,zones,shotAge,best);
+  if (dodge !== null && dodge !== best) { sidestep(dodge); return; }
+}if(escaping){if(escapeDirection!==best||Date.now()>=escapeUntil){escapeDirection=best;escapeUntil=Date.now()+650}}else{escapeDirection=-1;escapeUntil=0}status.textContent=evadingRed?"座標｜閃避紅圈":usingMagnet?"清場收尾：改撿可到達的磁鐵":forced.length?"座標｜強制撿裝備／卡片":escaping?"座標｜走位：脫離怪群":cleanup?"清場收尾：撿取裝備與卡片":followLeader?"座標｜跟隨隊長":(fresh?"座標｜":"畫面｜")+(chosen.chest?"走位：靠近寶箱":chosen.loot?(pickup?.kind === "magnet" ? "走位：靠近磁鐵" : pickup?.kind === "ball" ? "走位：撿燈籠節扭蛋" : "走位：靠近掉落物"):"走位：巡找掉落物");held=route[best];previousDirection=held;if(still>=2)status.textContent="座標未變：換方向避開卡點";for(const key of held)send("keydown",key);clearTimeout(movePulse);movePulse=setTimeout(release,escaping?155:chosen.uncertain?80:145)}else{status.textContent="已暫停走位："+captureStatus+""}}else if(picking){status.textContent="偵測到升級，但找不到可選卡片"}return}previousPosition=null;previousDirection=null;escapeDirection=-1;escapeUntil=0;release();if(picking)status.textContent="選擇技能："+label(next).split(/\n/).slice(0,4).join(" ");if(next!==last||next===go||next===stage)click(next)},160);const stop=()=>{requestLobbyNpc("cancel");delete document.documentElement.dataset.roHelperBossCleanup;delete document.documentElement.dataset.roHelperSkipChest;if(sharedVideo){sharedVideo.srcObject.getTracks().forEach(track=>track.stop());sharedVideo=null}clearInterval(timer);clearTimeout(movePulse);release();rotationProgress.textContent="";window.removeEventListener("blur",release);
   delete document.documentElement.dataset.roHelperFinishVictory;
   delete window[key];
   updateAssistantButton(false);
