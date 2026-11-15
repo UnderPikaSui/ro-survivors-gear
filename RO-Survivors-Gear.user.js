@@ -1,10 +1,11 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 試用版
 // @namespace ro-survivors-helper
-// @version 4.2
+// @version 20.1
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @match https://ro-survivors.com/*
+// @match https://www.ro-survivors.com/*
 // @match https://ro.hans-webgametw.com/*
 // @run-at document-start
 // @unwrap
@@ -41,28 +42,63 @@
     : {leader: null, leaderState: "missing"};
 }
 
-function victoryCleanup(game, dataset, now, emptySince) {
+function victoryCleanup(game, dataset, now, emptySince, internationalEdition) {
   if (!(game.lootUntil >= 0) || game.enemies.some(enemy => !enemy.dead)) {
     emptySince.delete(game);
     return null;
+  }
+  if (internationalEdition && game.coop) {
+    emptySince.delete(game);
+    return {gear: [], canFinish: false, ready: false, deferredPartyLoot: true};
   }
   const gear = game.pickups.filter(item => !item.dead && (item.kind === "loot" || item.kind === "card"));
   if (gear.length) emptySince.delete(game);
   else if (!emptySince.has(game)) emptySince.set(game, now);
   const ready = !gear.length && now - emptySince.get(game) >= 1000;
   const requestedAt = Number(dataset.roHelperFinishVictory);
-  const canFinish = !game.coop || game.coop.isHost === true;
+  const canFinish = !internationalEdition && (!game.coop || game.coop.isHost === true);
   if (canFinish && !game.story && !game.endless && game.state === "playing" && game.closeAt >= 0 &&
       ready && now - requestedAt >= 0 && now - requestedAt < 750) {
     // Advance through the game's normal victory settlement on the next update.
     game.closeAt = game.time;
   }
-  return {gear: gear.map(item => [item.kind, item.x, item.y]), canFinish, ready};
+  return {gear: gear.map(item => [item.kind, item.x, item.y]), canFinish, ready, waitForNaturalSettlement: internationalEdition};
 }
 
-function readGearWaypoint(game, cleanup, cache, now) {
+function watchLocalPickups(game, dataset, watched) {
+  if (watched.has(game) || typeof game.updatePickups !== "function") return watched.get(game);
+  const update = game.updatePickups;
+  const state = {lastMagnetAt: 0};
+  game.updatePickups = function (...args) {
+    const coop = this.coop;
+    const open = this.tryOpenChest;
+    const collect = this.collect;
+    const take = coop?.replica ? coop.take : null;
+    const skipChest = dataset.roHelperSkipChest === "on";
+    if (skipChest && typeof open === "function") this.tryOpenChest = () => {};
+    if (typeof collect === "function") this.collect = function (item, ...rest) {
+      if (item?.kind === "magnet") state.lastMagnetAt = this.time;
+      return collect.call(this,item,...rest);
+    };
+    if (typeof take === "function") coop.take = function (item, ...rest) {
+      if (item?.kind === "chest" && skipChest) { item.magnet = false; return; }
+      if (item?.kind === "magnet") state.lastMagnetAt = game.time;
+      return take.call(this,item,...rest);
+    };
+    try { return update.apply(this,args); }
+    finally {
+      if (skipChest && typeof open === "function") this.tryOpenChest = open;
+      if (typeof collect === "function") this.collect = collect;
+      if (typeof take === "function") coop.take = take;
+    }
+  };
+  watched.set(game,state);
+  return state;
+}
+
+function readGearWaypoint(game, cleanup, cache, now, magnet = false) {
   const {x,y} = game.player;
-  const isGear = item => !item.dead && (item.kind === "loot" || item.kind === "card");
+  const isGear = item => !item.dead && (magnet ? item.kind === "magnet" : item.kind === "loot" || item.kind === "card");
   const distance = item => Math.hypot(item.x-x,item.y-y);
   const previous = cache.get(game);
   if (previous && now < previous.retryAt) {
@@ -80,6 +116,7 @@ function readGearWaypoint(game, cleanup, cache, now) {
     const walk = game.walk;
     const [tx,ty] = walk?.nearestWalkable ? walk.nearestWalkable(item.x,item.y) : [item.x,item.y];
     const path = walk?.pathTo ? walk.pathTo(x,y,tx,ty) : [{x:tx,y:ty}];
+    if (magnet && (!path?.length || Math.hypot(path.at(-1).x-item.x,path.at(-1).y-item.y)>40)) continue;
     const point = path?.find(step => Math.hypot(step.x-x,step.y-y)>8);
     if (!point) continue;
     cache.set(game,{item,point,x:item.x,y:item.y,retryAt:now+450});
@@ -100,6 +137,14 @@ function isGameScript(url) {
   }
 }
 
+function readLootEffects(affixes, format) {
+  if (!Array.isArray(affixes) || !affixes.length || typeof format !== "function") return [];
+  try {
+    return format(affixes).map(effect => typeof effect === "string" ? effect : effect?.text?.(1))
+      .filter(line => typeof line === "string" && line.trim()).map(line => line.trim()).sort();
+  } catch { return []; }
+}
+
 function locateBattleLoop(source) {
   const calls = [...source.matchAll(/(?:^|[^.\w$])([A-Za-z_$][\w$]*)\s*\.\s*renderWorld\s*\(\s*\)/g)];
   if (!calls.length) return null;
@@ -118,7 +163,8 @@ function locateBattleLoop(source) {
   const dropNames = source.match(/\?([\w$]+)\(\w+\.id\):\w+\?([\w$]+)\(\w+\.id,""\)/);
   const imports = [...source.matchAll(/import\s*\{([^}]+)\}\s*from\s*["']([^"']+)["']/g)]
     .flatMap(([,names,path]) => names.split(",").map(name => ({parts:name.trim().split(/\s+as\s+/),path})));
-  const lootImports = [gearAlias,dropNames?.[1],dropNames?.[2],iconAlias].map(alias => {
+  const affixAlias = source.match(/,\.\.\.([\w$]+)\(\w+\.affixes\)\]\s*[,;]/)?.[1];
+  const lootImports = [gearAlias,dropNames?.[1],dropNames?.[2],iconAlias,affixAlias].map(alias => {
     if (!alias) return null;
     const entry = imports.find(({parts}) => (parts[1] || parts[0]) === alias);
     return entry ? {name:entry.parts[0],path:entry.path} : null;
@@ -129,7 +175,7 @@ function locateBattleLoop(source) {
     gameVariable: call[1],
     movement: input[3],
     lootImports,
-    lootAliases: [gearAlias,dropNames?.[1],dropNames?.[2],iconAlias],
+    lootAliases: [gearAlias,dropNames?.[1],dropNames?.[2],iconAlias,affixAlias],
     movementImport: movementImport && {name: movementImport.parts[0], path: movementImport.path},
     callLength: call[0].length,
     location: {lineNumber: lines.length - 1, columnNumber: lines.at(-1).length}
@@ -186,7 +232,20 @@ function locateBattleLoop(source) {
         };
   const victoryEmptySince = new WeakMap();
   const gearPaths = new WeakMap();
-  const lootSnapshot = () => undefined;
+        const magnetPaths = new WeakMap();
+        const pickupWatch = new WeakMap();
+  const lootRunIds = new WeakMap();
+  let lootRunNumber = 0;
+  let affixFormatter;
+  const lootSnapshot = game => {
+    if (!lootRunIds.has(game)) lootRunIds.set(game,"gear-"+Date.now()+"-"+ ++lootRunNumber);
+    const row = id => ["#"+id,"",0,"id:"+id];
+    return {id:lootRunIds.get(game),groups:[
+      (game.runLoot || []).map(({id,quality,affixes}) => ["#"+id,"",quality ?? 0,"id:"+id,readLootEffects(affixes,affixFormatter)]),
+      (game.runCards || []).map(id => row(id?.id ?? id)),
+      (game.runEggs || []).map(id => row(id?.id ?? id))
+    ]};
+  };
   let active, direction, loading;
   async function findDirection() {
     if (direction || loading) return;
@@ -202,13 +261,19 @@ function locateBattleLoop(source) {
       try {
         const response = await fetch(url);
         if (!response.ok) continue;
-        const movement = locateBattleLoop(await response.text())?.movementImport;
+        const battle = locateBattleLoop(await response.text());
+        const movement = battle?.movementImport;
         if (!movement) continue;
         const target = new URL(movement.path,url);
         if (target.origin !== location.origin) continue;
         const module = await import(target.href);
         if (typeof module[movement.name] === "function") {
           direction = module[movement.name];
+          const format = battle.lootImports[4];
+          if (format) {
+            const formatUrl = new URL(format.path,url);
+            if (formatUrl.origin === location.origin) affixFormatter = (await import(formatUrl.href))[format.name];
+          }
           break;
         }
       } catch {}
@@ -258,7 +323,7 @@ function locateBattleLoop(source) {
   let lastAttempt = -5000;
   setInterval(() => {
     const z = active;
-    if (!document.querySelector("#hud:not(.hidden)")) return;
+    if (!document.querySelector("#hud:not(.hidden), #gameover:not(.hidden)")) return;
     if (!z?.player) {
       setPhase("進場了，但 Gear 尚未讀到戰鬥物件");
       return;
@@ -269,7 +334,7 @@ function locateBattleLoop(source) {
     }
     readHazards(z);
     if (!direction) return;
-    try { (() => { const root = document.documentElement; if (!z?.player || performance.now() - Number(root.dataset.roHelperLast || 0) < 100) return false; const {x,y} = z.player; const partyLeader = readPartyLeader(z, performance.now()); const cleanup = victoryCleanup(z,root.dataset,Date.now(),victoryEmptySince); const gearWaypoint = readGearWaypoint(z,cleanup,gearPaths,performance.now()); const reach = gearWaypoint ? Math.max(24,Math.min(60,Math.hypot(gearWaypoint.x-x,gearWaypoint.y-y))) : 60; const routes = [[1,0],[0,1],[-1,0],[0,-1],[1,-1],[1,1],[-1,1],[-1,-1]].map(([dx,dy]) => { const length=Math.hypot(dx,dy); const [vx,vy]=direction(dx/length,dy/length); const clearAt = length => [.2,.4,.6,.8,1].every(fraction=>{const step=length*fraction;const tx=x+vx*step,ty=y+vy*step;return tx>=z.bounds.x0&&tx<=z.bounds.x1&&ty>=z.bounds.y0&&ty<=z.bounds.y1&&(!z.walk||z.walk.walkable(tx,ty))});const distance = [reach,reach/2,reach/4].find(clearAt) || reach; return [x+vx*distance,y+vy*distance,clearAt(distance)] }); const nearby=e=>!e.dead&&Math.hypot(e.x-x,e.y-y)<520; root.dataset.roHelperLive=JSON.stringify({at:Date.now(),battleSeconds:z.time,lootLog:lootSnapshot(z),player:[x,y],...partyLeader,cleanup,gearWaypoint,routes,zeny:z.zeny,chestCost:z.chestCost(),hazards:readHazards(z),bell:readBell(z),enemies:z.enemies.filter(nearby).map(e=>[e.x,e.y]),drops:z.pickups.filter(e=>!e.dead&&Math.hypot(e.x-x,e.y-y)<(e.kind==='loot'||e.kind==='card'?800:520)).map(e=>[e.kind,e.x,e.y])});root.dataset.roHelperLast=String(performance.now());return false })(); setPhase(""); delete document.documentElement.dataset.roHelperError; } catch (error) {
+    try { (() => { const root = document.documentElement; if (!z?.player || performance.now() - Number(root.dataset.roHelperLast || 0) < 100) return false; const {x,y} = z.player; const partyLeader = readPartyLeader(z, performance.now()); const cleanup = victoryCleanup(z,root.dataset,Date.now(),victoryEmptySince,location.hostname !== "ro.hans-webgametw.com"); const lastMagnetAt = watchLocalPickups(z,root.dataset,pickupWatch)?.lastMagnetAt ?? 0; const gearWaypoint = readGearWaypoint(z,cleanup || root.dataset.roHelperBossCleanup==='on',gearPaths,performance.now()); const magnetWaypoint = (cleanup || root.dataset.roHelperBossCleanup==='on') && z.pickups.some(e=>!e.dead&&(e.kind==='loot'||e.kind==='card')) ? readGearWaypoint(z,true,magnetPaths,performance.now(),true) : null; const waypoint = gearWaypoint || magnetWaypoint; const reach = waypoint ? Math.max(24,Math.min(60,Math.hypot(waypoint.x-x,waypoint.y-y))) : 60; const routes = [[1,0],[0,1],[-1,0],[0,-1],[1,-1],[1,1],[-1,1],[-1,-1]].map(([dx,dy]) => { const length=Math.hypot(dx,dy); const [vx,vy]=direction(dx/length,dy/length); const clearAt = length => [.2,.4,.6,.8,1].every(fraction=>{const step=length*fraction;const tx=x+vx*step,ty=y+vy*step;return tx>=z.bounds.x0&&tx<=z.bounds.x1&&ty>=z.bounds.y0&&ty<=z.bounds.y1&&(!z.walk||z.walk.walkable(tx,ty))});const distance = [reach,reach/2,reach/4].find(clearAt) || reach; return [x+vx*distance,y+vy*distance,clearAt(distance)] }); const nearby=e=>!e.dead&&Math.hypot(e.x-x,e.y-y)<520; root.dataset.roHelperLive=JSON.stringify({at:Date.now(),battleSeconds:z.time,runBaseExp:z.endless ? null : z.charExp?.base,bossFarm:{gear:root.dataset.roHelperBossCleanup==='on'?z.pickups.filter(e=>!e.dead&&(e.kind==='loot'||e.kind==='card')).map(e=>[e.kind,e.x,e.y]):null,solo:!z.coop&&!z.story&&!z.endless,playing:z.state==='playing',bosses:(z.bosses||[]).filter(e=>e.def?.boss).map(e=>[e.def.id,e.def.name]),kills:Object.fromEntries((z.script?.bosses||[]).map(e=>[e.id,z.killsBy?.get(e.id)||0])),maze:z.stageId==='maze'?(z.script?.bosses||[]).map(e=>[e.id,e.t]):[]},lastMagnetAt,lootLog:lootSnapshot(z),player:[x,y],...partyLeader,cleanup,gearWaypoint,magnetWaypoint,routes,zeny:z.zeny,chestCost:z.chestCost(),hazards:readHazards(z),bell:readBell(z),enemies:z.enemies.filter(nearby).map(e=>[e.x,e.y]),drops:z.pickups.filter(e=>!e.dead&&Math.hypot(e.x-x,e.y-y)<(e.kind==='loot'||e.kind==='card'?800:520)).map(e=>[e.kind,e.x,e.y])});root.dataset.roHelperLast=String(performance.now());return false })(); setPhase(""); delete document.documentElement.dataset.roHelperError; } catch (error) {
       document.documentElement.dataset.roHelperError = error.message;
     }
   },100);
@@ -281,7 +346,7 @@ function mountGearAssistant() {
   const button = document.createElement("button");
   button.type = "button";
   const updateAssistantButton = running => {
-    button.textContent = "RO 練等助手 " + "Gear V4.2" + " · " + (running ? "啟動中" : "已關閉");
+    button.textContent = "RO 練等助手 " + "Gear V20.1" + " · " + (running ? "啟動中" : "已關閉");
     button.setAttribute("aria-pressed", String(running));
   };
   updateAssistantButton(false);
@@ -402,32 +467,70 @@ function mountGearAssistant() {
   ];
   const treasureList = () => [...new Set([...knownTreasures, ...readNames("ro-helper-treasures")].map(normalizeTreasure).filter(Boolean))];
   const treasurePriority = () => readNames("ro-helper-treasure-priority").map(normalizeTreasure);
-  const skillList = () => [...new Set(["火箭術", "冰箭術", "冰凍術", "聖靈召喚", "雷擊術", "火狩", "火焰之壁", "雷爆術", "攻擊：法杖", ...readNames("ro-helper-seen-skills")])];
+  const wizardSkillNames = [
+    ["隕石術", "隕石", "Meteor Storm"],
+    ["火柱攻擊", "火柱", "Fire Pillar"]
+  ];
+  const skillCardName = card => card.querySelector(".pk-name")?.textContent.trim() || "";
+  const skillMatches = (name, actual) => actual === name || wizardSkillNames.some(aliases =>
+    aliases.includes(name) && aliases.some(alias => alias.toLowerCase() === actual.toLowerCase()));
+  const skillList = () => [...new Set(["火箭術", "冰箭術", "冰凍術", "聖靈召喚", "雷擊術", "火狩", "火焰之壁", "雷爆術", "攻擊：法杖", ...wizardSkillNames.map(([name]) => name), ...readNames("ro-helper-seen-skills")])];
   const banishSkills = () => readNames("ro-helper-banish-skills");
   const banishBasic = () => readSetting("ro-helper-banish-basic") === "on";
   const elementalArrows = [
     ["firebolt","火箭術","Fire Bolt"], ["coldbolt","冰箭術","Cold Bolt"], ["lightning","雷擊術","Lightning Bolt"]
   ];
   const arrowUpgrades = [
-    ["shots","追加發數",/發數|投射物|[+＋]\s*\d+\s*(?:枚|發)|projectiles?|bolts?/i],
+    ["shots","追加發數",/發數|投射物|[+＋]\s*\d+\s*(?:(?:枚|顆|道|支|發)(?:\s|$|[，。個箭彈投攻])|(?:bolts?|shots?|projectiles?|proyectil(?:es)?|proj[eé]teis|disparos?)\b)|(?:額外|追加|增加)\s*\d*\s*(?:發|枚|支|顆)|\b(?:projectiles?|proyectil(?:es)?|proj[eé]teis)\b/i],
+    ["targets","目標數量",/目標數(?:量)?|[+＋]\s*\d+\s*(?:個\s*)?目標|[+＋]\s*\d+\s*(?:targets?|objetivos?|alvos?)\b/i],
     ["damage","傷害",/傷害|damage/i],
     ["cast","詠唱速度",/詠唱|吟唱|施法|cast/i]
   ];
   const arrowSetting = key => readSetting("ro-helper-arrow-" + key);
-  function selectElementalArrow(cards, owned, starter, preference) {
+  const starterSlots = ["starter","starter2","starter3"];
+  const starterValue = (key, index) => arrowSetting(key) ?? (index === 0 && arrowSetting("mode") === "on" ? "coldbolt" : "");
+  const starterArrows = () => starterSlots.map(starterValue);
+  const starterOptions = names => [["","不指定"], ...elementalArrows, ...names
+    .filter(name => !isBasicAttack(name) && !elementalArrows.some(([,zh,en]) => name === zh || name === en))
+    .map(name => [name,name])];
+  function selectStartingSkill(cards, starters, skipArrows) {
+    for (const starter of new Set(starters.filter(Boolean))) {
+      const arrow = elementalArrows.find(([id]) => id === starter);
+      if (skipArrows && arrow) continue;
+      const choice = cards.find(card => {
+        if (!card.querySelector(".pk-ribbon")) return false;
+        const name = skillCardName(card);
+        return arrow ? arrow.slice(1).includes(name) || (starter === "coldbolt" && /^ice bolt$/i.test(name)) : skillMatches(starter,name);
+      });
+      if (choice) return choice;
+    }
+    return null;
+  }
+  function selectElementalArrow(cards, owned, starters, preference) {
     const arrow = card => {
-      const name = card.querySelector(".pk-name")?.textContent.trim();
-      const text = name?.toLowerCase();
-      const match = elementalArrows.find(([,zh,en]) => text === zh || text === en.toLowerCase());
-      return match?.[0] || (text === "ice bolt" ? "coldbolt" : undefined);
+      const identify = text => elementalArrows.find(([,zh,en]) =>
+        text.includes(zh) || text.includes(en.toLowerCase()))?.[0] ||
+        (/\bice bolt\b/.test(text) ? "coldbolt" : undefined);
+      // Shared upgrades can display Cold Bolt as the title and the real arrow in the subtitle.
+      return identify(card.querySelector(".pk-sub")?.textContent.toLowerCase() || "") ||
+        identify(skillCardName(card).toLowerCase());
     };
     const fresh = card => Boolean(card.querySelector(".pk-ribbon"));
     const upgrades = cards.filter(card => arrow(card) && !fresh(card));
-    if (!owned && !upgrades.length) return cards.find(card => arrow(card) === starter && fresh(card));
+    if (!owned && !upgrades.length) {
+      for (const starter of new Set(starters.filter(Boolean))) {
+        const choice = cards.find(card => arrow(card) === starter && fresh(card));
+        if (choice) return choice;
+      }
+      return null;
+    }
     const order = [...arrowUpgrades].sort(([a],[b]) => Number(b === preference) - Number(a === preference));
     const score = card => {
-      const lines = card.querySelector(".pk-lines")?.textContent || "";
-      const index = order.findIndex(([, , pattern]) => pattern.test(lines));
+      const description = card.querySelector(".pk-lines");
+      const rows = [...(description?.querySelectorAll("li") ?? [])]
+        .filter(row => !row.querySelector(".pk-talent"))
+        .map(row => row.textContent.normalize("NFKC").trim());
+      const index = order.findIndex(([, , pattern]) => rows.some(line => pattern.test(line)));
       return index < 0 ? 0 : order.length - index;
     };
     return upgrades
@@ -446,7 +549,7 @@ function mountGearAssistant() {
     if (skillSettings) {
       for (const [key,label,choices,fallback] of [
         ["mode","技能選卡模式",[["off","原本優先順序"],["on","法師：三元素箭共用"]],"off"],
-        ["starter","起手箭",elementalArrows,"coldbolt"],
+        ...starterSlots.map((key,index) => [key,"起手技能 " + (index + 1),starterOptions(names),starterValue(key,index)]),
         ["preference","同稀有度優先",arrowUpgrades,"shots"]
       ]) {
         const row = document.createElement("label");
@@ -565,16 +668,34 @@ function mountGearAssistant() {
     ["events", "事件數量", 250, 200]
   ];
   if (taiwanGame) difficultyFields.push(["tier","刷關等級",20,20]);
+  const difficultyEdition = taiwanGame ? "漢斯版" : "國際版";
   const difficultyKey = mode => "ro-helper-difficulty-" + mode;
+  const observedDifficulty = new Map();
+  const difficultySlider = (dialog, key) =>
+    dialog?.querySelector('#npc-text .diff input[data-key="' + key + '"]');
+  const difficultyScale = key => key === "tier" ? 1 : 100;
+  function readDifficultyLimits(dialog) {
+    if (!dialog) return;
+    const kind = dialog.querySelector("#npc-text .diff input[data-pick]") ? "party" : "solo";
+    for (const [key] of difficultyFields) {
+      const input = difficultySlider(dialog, key);
+      if (!input?.min || !input.max) continue;
+      const scale = difficultyScale(key);
+      const min = Math.round(Number(input.min) * scale);
+      const max = Math.round(Number(input.max) * scale);
+      if (Number.isFinite(min) && max >= min && Number.isFinite(max)) {
+        observedDifficulty.set(kind + ":" + key, { min, max });
+      }
+    }
+  }
   const getDifficulty = mode => {
     let saved;
     try { saved = JSON.parse(localStorage.getItem(settingKey(difficultyKey(mode))) ?? localStorage.getItem(settingKey("ro-helper-difficulty"))); } catch {}
     if (!saved || typeof saved !== "object" || Array.isArray(saved)) return null;
-    return Object.fromEntries(difficultyFields.map(([key, , soloMax, partyMax]) => {
-      if (key === "tier") return [key, Math.min(20,Math.max(1,Math.round(Number(saved[key])) || 1))];
-      const max = taiwanGame ? 2000 : mode === "party" ? partyMax : soloMax;
-      const value = Number(saved?.[key]);
-      return [key, Number.isFinite(value) && value >= 100 ? Math.min(max, Math.round(value / 5) * 5) : 100];
+    return Object.fromEntries(difficultyFields.map(([key]) => {
+      const value = Number(saved[key]);
+      const fallback = key === "tier" ? 1 : 100;
+      return [key, Number.isFinite(value) && value > 0 ? value : fallback];
     }));
   };
   const difficultyButton = document.createElement("button");
@@ -582,12 +703,16 @@ function mountGearAssistant() {
   difficultyButton.textContent = "難度設定";
   difficultyButton.style.cssText = button.style.cssText + ";right:440px";
   difficultyButton.onclick = () => {
+    readDifficultyLimits(expeditionDifficultyDialog());
     const dialog = document.createElement("dialog");
     dialog.id = "ro-helper-settings";
     const form = document.createElement("form");
     form.method = "dialog";
     form.style.cssText = "display:grid;gap:10px;padding:16px";
-    form.append("自動進場難度");
+    form.append(difficultyEdition + "｜自動進場難度");
+    const hint = document.createElement("small");
+    hint.textContent = "直接輸入百分比，例如 350 代表 350%。出發時依遊戲當下允許的範圍與刻度套用。";
+    form.append(hint);
     const mode = document.createElement("select");
     mode.setAttribute("aria-label","難度模式");
     mode.append(new Option("單人","solo"),new Option("組隊","party"));
@@ -595,29 +720,36 @@ function mountGearAssistant() {
     form.append(mode);
     const drafts = new Map();
     let displayed = mode.value;
-    const inputs = difficultyFields.map(([key, name]) => {
+    const inputs = difficultyFields.map(([key, name, soloMax, partyMax]) => {
       const row = document.createElement("label");
       const input = document.createElement("input");
-      const output = document.createElement("output");
-      input.type = "range";
-      input.min = key === "tier" ? 1 : 100;
-      input.step = key === "tier" ? 1 : 5;
-      const update = () => { output.textContent = key === "tier" ? "Lv " + input.value : input.value + "%"; };
-      input.oninput = update;
-      row.append(name + " ", input, output);
+      const range = document.createElement("small");
+      input.type = "number";
+      input.inputMode = "numeric";
+      input.required = true;
+      input.step = "1";
+      input.min = "1";
+      input.style.width = "7em";
+      row.append(name + (key === "tier" ? " Lv " : " % "), input, " ", range);
       form.append(row);
-      return [key, input];
+      return { key, input, range, soloMax, partyMax };
     });
-    const readInputs = () => Object.fromEntries(inputs.map(([key,input]) => [key,Number(input.value)]));
+    const readInputs = () => Object.fromEntries(inputs.map(({key,input}) => [key,input.valueAsNumber]));
     const loadInputs = () => {
       const saved = drafts.get(displayed) ?? getDifficulty(displayed);
-      inputs.forEach(([key,input],index) => {
-        input.max = key === "tier" ? 20 : taiwanGame ? 2000 : displayed === "party" ? difficultyFields[index][3] : difficultyFields[index][2];
-        input.value = saved?.[key] ?? Number(input.min);
-        input.oninput();
-      });
+      for (const {key,input,range,soloMax,partyMax} of inputs) {
+        const observed = observedDifficulty.get(displayed + ":" + key);
+        const min = observed?.min ?? (key === "tier" ? 1 : 100);
+        const max = observed?.max ?? (taiwanGame && key !== "tier" ? 2000 : displayed === "party" ? partyMax : soloMax);
+        range.textContent = "(" + min + "–" + max + ")";
+        input.value = Math.round(saved?.[key] ?? min);
+      }
     };
     mode.onchange = () => {
+      if (!form.reportValidity()) {
+        mode.value = displayed;
+        return;
+      }
       drafts.set(displayed,readInputs());
       displayed = mode.value;
       loadInputs();
@@ -631,9 +763,10 @@ function mountGearAssistant() {
     cancel.onclick = () => dialog.close();
     form.onsubmit = event => {
       event.preventDefault();
+      if (!form.reportValidity()) return;
       drafts.set(displayed,readInputs());
       for (const [kind,values] of drafts) writeSetting(difficultyKey(kind),JSON.stringify(values));
-      status.textContent = "已儲存難度，下次出發時套用";
+      status.textContent = "已儲存" + difficultyEdition + "難度，下次出發時套用";
       dialog.close();
     };
     form.append(save, cancel);
@@ -646,13 +779,13 @@ function mountGearAssistant() {
     if (!saved) return "";
     const sliders = difficultyFields.map(([key, name]) => ({
       key, name,
-      input: dialog?.querySelector('#npc-text .diff input[data-key="' + key + '"]'),
+      input: difficultySlider(dialog, key),
       output: dialog?.querySelector('#npc-text .diff [data-out="' + key + '"]')
     }));
     const missing = sliders.find(({input, output}) => !input || !output);
     if (missing) return "找不到難度欄位：" + missing.name;
     for (const {key, name, input, output} of sliders) {
-      const scale = key === "tier" ? 1 : 100;
+      const scale = difficultyScale(key);
       const min = Number(input.min || 1);
       const max = Number(input.max || saved[key] / scale);
       const step = Number(input.step) || 0.05;
@@ -660,9 +793,9 @@ function mountGearAssistant() {
       const percent = Math.round(Math.min(max,min + Math.round((value-min)/step)*step)*scale);
       input.value = String(percent / scale);
       input.dispatchEvent(new Event("input", {bubbles:true}));
-      if (Math.round(Number(input.value) * scale) !== percent ||
-          output.textContent.trim() !== (key === "tier" ? "Lv " + percent : percent + "%")) {
-        return "難度未套用：" + name + " " + percent + "%";
+      const expected = key === "tier" ? "Lv " + percent : percent + "%";
+      if (Math.round(Number(input.value) * scale) !== percent || output.textContent.trim() !== expected) {
+        return "難度未套用：" + name + " " + expected;
       }
     }
     return "";
@@ -678,7 +811,7 @@ function mountGearAssistant() {
     if (!target) return null;
     for (const slot of picker.querySelectorAll("#pk-cards .pk-slot")) {
       const name = slot.querySelector(".pk-card .pk-name")?.textContent.trim();
-      if (!name || (chest ? normalizeTreasure(name) !== normalizeTreasure(target) : name !== target)) continue;
+      if (!name || (chest ? normalizeTreasure(name) !== normalizeTreasure(target) : !skillMatches(target, name))) continue;
       const action = [...slot.querySelectorAll(".pk-acts button.pk-act")].find(button =>
         /^(?:專注|Focus)(?:\s*\d+)?$/i.test(button.textContent.trim()) &&
         visible(button) && !used.has(button));
@@ -693,7 +826,7 @@ function mountGearAssistant() {
       const name = card?.querySelector(".pk-name")?.textContent.trim();
       if (!name) continue;
       // New skills have a ribbon. The game offers their upgrades only after acquisition.
-      const shouldBanish = isBasicAttack(name) ? basic : names.includes(name) && !card.querySelector(".pk-ribbon");
+      const shouldBanish = isBasicAttack(name) ? basic : names.some(saved => skillMatches(saved, name)) && !card.querySelector(".pk-ribbon");
       if (!shouldBanish) continue;
       const button = [...slot.querySelectorAll(".pk-acts button.pk-act")].find(action =>
         /^(?:放逐|Banish)(?:\s*\d+)?$/i.test(action.textContent.trim()) && visible(action) && !used.has(action));
@@ -735,6 +868,20 @@ function mountGearAssistant() {
   stageMode.setAttribute("aria-label", "選關模式");
   stageMode.append(new Option("固定關卡", "fixed"), new Option("自動打最高層（略過劇情）", "highest"),
     new Option("多關卡循環", "rotation"));
+  if (taiwanGame) stageMode.append(new Option("擊敗指定首領後重刷（單人）", "boss"));
+  const bossTarget = document.createElement("input");
+  bossTarget.placeholder = "輸入或選擇首領";
+  bossTarget.setAttribute("aria-label","指定首領");
+  const bossOptions = document.createElement("datalist");
+  bossOptions.id = "ro-helper-boss-targets";
+  bossTarget.setAttribute("list",bossOptions.id);
+  const mazeBossTimes = new Map([["狂暴大腳熊",180],["雪熊",360],["惡魔波利",600],["巴風特",840]]);
+  const bossKey = name => name.normalize("NFKC").toLowerCase().replace(/[\s_-]+/g,"");
+  function refreshBossOptions() {
+    const names = readNames("ro-helper-seen-bosses");
+    if (fixedStage.value === "迷宮森林") names.unshift(...mazeBossTimes.keys());
+    bossOptions.replaceChildren(...[...new Set(names)].map(name => new Option(name,name)));
+  }
   const fixedStage = document.createElement("select");
   fixedStage.setAttribute("aria-label", "固定關卡");
   const rotationSettings = document.createElement("div");
@@ -748,14 +895,14 @@ function mountGearAssistant() {
   const stageChecks = document.createElement("div");
   const rotationProgress = document.createElement("div");
   rotationSettings.append(repeatsLabel, stageChecks);
-  stageSettings.append(stageSummary, stageMode, fixedStage, rotationSettings, rotationProgress);
+  stageSettings.append(stageSummary, stageMode, fixedStage, bossTarget, bossOptions, rotationSettings, rotationProgress);
 
   const repeatCount = value => Math.max(1, Math.min(Number.MAX_SAFE_INTEGER, Math.floor(Number(value)) || 1));
   const rotationStages = () => readNames("ro-helper-stage-rotation");
   function refreshStageChoices() {
     const saved = readSetting("ro-helper-stage") ?? sessionStorage.getItem("ro-helper-stage");
     const checked = rotationStages();
-    const names = [...new Set([...knownStages, ...readNames("ro-helper-seen-stages"), ...checked,
+    const names = [...new Set([...knownStages, ...(taiwanGame ? ["迷宮森林"] : []), ...readNames("ro-helper-seen-stages"), ...checked,
       ...[saved].filter(name => name && name !== highestStageMode)])];
     fixedStage.replaceChildren(new Option("請選擇關卡", ""), ...names.map(name => new Option(name, name)));
     fixedStage.value = saved === highestStageMode ? "" : saved || "";
@@ -777,7 +924,8 @@ function mountGearAssistant() {
     }
   }
   function refreshStageMode() {
-    fixedStage.hidden = stageMode.value !== "fixed";
+    fixedStage.hidden = stageMode.value !== "fixed" && stageMode.value !== "boss";
+    bossTarget.hidden = !taiwanGame || stageMode.value !== "boss";
     rotationSettings.hidden = stageMode.value !== "rotation";
     rotationProgress.hidden = stageMode.value !== "rotation";
   }
@@ -786,20 +934,96 @@ function mountGearAssistant() {
       ((readSetting("ro-helper-stage") ?? sessionStorage.getItem("ro-helper-stage")) === highestStageMode ? "highest" : "fixed");
     stageRepeats.value = String(repeatCount(readSetting("ro-helper-stage-repeats")));
     rotationProgress.textContent = "";
+    bossTarget.value = readSetting("ro-helper-boss-target") || "";
     refreshStageChoices();
+    refreshBossOptions();
     refreshStageMode();
   }
   stageMode.addEventListener("change", () => {
     writeSetting("ro-helper-stage-mode", stageMode.value);
     refreshStageMode();
   });
-  fixedStage.addEventListener("change", () => writeSetting("ro-helper-stage", fixedStage.value));
+  fixedStage.addEventListener("change", () => {
+    writeSetting("ro-helper-stage", fixedStage.value);
+    refreshBossOptions();
+  });
+  bossTarget.addEventListener("change", () => writeSetting("ro-helper-boss-target",bossTarget.value.trim()));
   stageRepeats.addEventListener("change", () => {
     stageRepeats.value = String(repeatCount(stageRepeats.value));
     writeSetting("ro-helper-stage-repeats", stageRepeats.value);
   });
   loadStageSettings();
 
+  const chestMode = document.createElement("select");
+  chestMode.setAttribute("aria-label", "撿取寶箱");
+  chestMode.append(new Option("會撿取寶箱","collect"), new Option("不撿取寶箱（可經過）","pass"), new Option("躲避寶箱","avoid"));
+  const loadChestMode = () => {
+    const saved = readSetting("ro-helper-chest-mode");
+    chestMode.value = saved === "pass" || saved === "avoid" ? saved : "collect";
+  };
+  loadChestMode();
+  chestMode.addEventListener("change", () => writeSetting("ro-helper-chest-mode",chestMode.value));
+  const magnetSetting = document.createElement("label");
+  magnetSetting.textContent = "自動撿磁鐵（分鐘） ";
+  const magnetInterval = document.createElement("input");
+  magnetInterval.type = "number";
+  magnetInterval.inputMode = "decimal";
+  magnetInterval.min = "0";
+  magnetInterval.step = "any";
+  magnetInterval.title = "依遊戲內時間計算，填 0 關閉";
+  magnetInterval.setAttribute("aria-label", "自動撿磁鐵間隔分鐘，0 關閉");
+  magnetInterval.style.cssText = "width:4em;color:#111;background:#fff";
+  magnetSetting.append(magnetInterval);
+  const loadMagnetInterval = () => { magnetInterval.value = readSetting("ro-helper-magnet-minutes") || "0"; };
+  loadMagnetInterval();
+  magnetInterval.addEventListener("change", () => {
+    const value = magnetInterval.valueAsNumber;
+    writeSetting("ro-helper-magnet-minutes",String(Number.isFinite(value) && value > 0 ? value : 0));
+    loadMagnetInterval();
+  });
+  function crossesChest([px,py], x, y, chests) {
+    const dx = x-px, dy = y-py;
+    const lengthSquared = dx*dx + dy*dy;
+    return chests.some(([,cx,cy]) => {
+      cy -= 20;
+      const startDistance = Math.hypot(px-cx,py-cy);
+      const fraction = Math.max(0,Math.min(1,((cx-px)*dx + (cy-py)*dy)/(lengthSquared || 1)));
+      if (startDistance < 42) return fraction > 0 || Math.hypot(x-cx,y-cy) <= startDistance;
+      return Math.hypot(px+dx*fraction-cx,py+dy*fraction-cy) < 42;
+    });
+  }
+  function createPickupTracker() {
+    let target;
+    const skipped = new Map();
+    const keyOf = ([kind,x,y]) => kind + ":" + Math.round(x) + ":" + Math.round(y);
+    return (drops, [px,py], affordable, now, reset = false) => {
+      if (reset) { target = undefined; skipped.clear(); return null; }
+      for (const [key,until] of skipped) if (now >= until) skipped.delete(key);
+      const choices = [];
+      for (const drop of drops) {
+        const [kind,x,y] = drop;
+        if (kind === "loot" || kind === "card" || (kind === "chest" && !affordable)) continue;
+        const key = keyOf(drop);
+        if (skipped.has(key)) continue;
+        const aimY = kind === "chest" ? y - 20 : y;
+        const distance = Math.hypot(x-px,aimY-py);
+        if (distance <= 480) choices.push({key,kind,x,y:aimY,distance});
+      }
+      const current = choices.find(choice => choice.key === target?.key);
+      if (current) {
+        if (current.distance < target.best - 6) {
+          target.best = current.distance;
+          target.progressAt = now;
+        }
+        if (now - target.progressAt < 1100) return current;
+        skipped.set(current.key,now+5000);
+      }
+      const next = choices.filter(choice => !skipped.has(choice.key)).sort((a,b) =>
+        Number(b.kind === "magnet") - Number(a.kind === "magnet") || Number(b.kind === "chest") - Number(a.kind === "chest") || a.distance-b.distance)[0];
+      target = next && {key:next.key,best:next.distance,progressAt:now};
+      return next ?? null;
+    };
+  }
   function advanceRotation(rotation, stages, repeats) {
     if (!stages.includes(rotation.stage)) return {stage: stages[0], completed: 0};
     const completed = rotation.completed + 1;
@@ -848,7 +1072,10 @@ function mountGearAssistant() {
       const action = rolling
         ? (["need", "greed", "pass"].includes(selectedRoll) ? reveal.querySelector('.dr-roll-btns button[data-c="' + selectedRoll + '"]') : null)
         : (supportedDrop ? confirm : null);
-      if (!action || action.disabled) return true;
+      if (!action || action.disabled) {
+        if (rolling) status.textContent = !selectedRoll ? "等待手動擲骰" : "等待擲骰結果";
+        return true;
+      }
       const now = performance.now();
       const current = reveal.querySelector(".dr-inner") || action;
       let state = seen.get(current);
@@ -905,6 +1132,14 @@ function mountGearAssistant() {
     writeSetting("ro-helper-party-role", partyMode.value);
     partyWaitingUntil = 0;
   });
+  function finalStageDialogButton() {
+    const dialog = document.querySelector("#npc-dialog:not(.hidden)");
+    if (!dialog?.getClientRects().length) return null;
+    const title = dialog.querySelector("#npc-name")?.textContent.trim() || "";
+    if (!/^(?:未完待續|To be continued|Continuará)[.…。！!\s]*$/i.test(title)) return null;
+    const accept = dialog.querySelector("#npc-options button.primary");
+    return /^(?:接受|Accept|OK|Aceptar)[。！!\s]*$/i.test(accept?.textContent.trim() || "") ? accept : null;
+  }
   function expeditionDifficultyDialog() {
     const dialog = document.querySelector("#npc-dialog:not(.hidden)");
     return dialog?.getClientRects().length && dialog.querySelector("#npc-text .diff") ? dialog : null;
@@ -1044,10 +1279,31 @@ function mountGearAssistant() {
   });
   const lootHistory = new Map();
   const revealedLoot = new Map();
+  const settledLoot = new Map();
   let seenLootReveals = new WeakSet();
   let currentLootRun = null;
   let fallbackLootRun = 0;
   let lootBattleActive = false;
+  function trackSettlementLoot(settlement, run) {
+    const groups = [[],[],[]];
+    for (const icon of settlement.querySelectorAll(".go-loot img, .go-items img, .go-eggs img, .go-cards img, .go-pets img")) {
+        const title = (icon.getAttribute("title") || icon.getAttribute("alt") || "").trim();
+        if (!title) continue;
+        const key = title.normalize("NFKC").toLowerCase();
+        const category = icon.classList.contains("cardimg") || icon.closest(".go-cards") || lootCatalog[1].has(key) || /卡[片牌]$|\bcard$|^carta\b/i.test(title) ? 1 :
+          icon.closest(".go-eggs, .go-pets") || lootCatalog[2].has(key) || /(?:寵物蛋|蛋)$|\begg$|^huevo\b/i.test(title) ? 2 :
+          icon.closest(".go-items") || [...icon.classList].some(name => /^q[0-5]$/.test(name)) ? 0 : -1;
+        if (category < 0) continue;
+        const rarity = category === 0 ? [...icon.classList].find(name => /^q[0-5]$/.test(name)) : null;
+        const name = category === 0 ? title.replace(/\s*[（(][^）()]+[）)]$/, "") : title;
+        const iconKey = icon.src ? "icon:" + new URL(icon.src).pathname : "";
+        groups[category].push([name,"",rarity ? Number(rarity[1]) : 0,iconKey]);
+    }
+    const signature = JSON.stringify(groups);
+    if (!groups.some(rows => rows.length) || settledLoot.get(run)?.signature === signature) return;
+    settledLoot.set(run,{signature,groups});
+    refreshLootWindow();
+  }
   function recordLootReveal(run) {
     const reveal = document.querySelector("#drop-reveal:not(.hidden):not(.roll)");
     const item = reveal?.querySelector(".dr-inner");
@@ -1067,7 +1323,9 @@ function mountGearAssistant() {
     const groups = revealedLoot.get(run) || [[],[],[]];
     const icon = category === 0 ? item.querySelector(".dr-card img") : null;
     const iconKey = icon?.src ? "icon:" + new URL(icon.src).pathname : "";
-    groups[category].push([name,"",Math.max(0,tier),iconKey]);
+    const stats = category === 0 ? [...item.querySelectorAll(".dr-stats li:not(.dr-note)")]
+      .map(line => line.textContent.trim()).filter(Boolean).sort() : undefined;
+    groups[category].push([name,"",Math.max(0,tier),iconKey,stats]);
     revealedLoot.set(run,groups);
     refreshLootWindow();
   }
@@ -1084,26 +1342,30 @@ function mountGearAssistant() {
     return index;
   });
   const cardEffects = {"4001":["+3% 迴避","+2% 爆擊"],"4002":["+30 最大 HP"],"4003":["+40 最大 HP"],"4004":["+6% 投射物速度","+3% 傷害"],"4006":["+3% 爆擊","+2% 迴避"],"4007":["-3% 受到傷害"],"4008":["+3% 傷害","+10 最大 HP"],"4009":["+5% 移動速度"],"4010":["+5 冷卻縮減"],"4012":["+25 最大 HP","+1 護甲"],"4014":["+40 最大 HP"],"4015":["+5% 迴避"],"4016":["+3% 迴避"],"4017":["命中時 +5% 暈眩"],"4019":["+3% 傷害","+1% 爆擊"],"4020":["命中時 +3% 暈眩"],"4021":["+4% 傷害"],"4022":["+2 護甲"],"4023":["+3 冷卻縮減"],"4024":["命中時 +4% 暈眩"],"4025":["+4% 傷害","命中時 +2% 暈眩"],"4026":["+2% 爆擊","+2% 傷害"],"4027":["+2 AGI"],"4028":["+2 STR"],"4029":["+6% 傷害","+2% 爆擊"],"4030":["+5% 傷害"],"4033":["+0.5 HP/秒"],"4034":["+2 DEX"],"4035":["+5% 傷害"],"4037":["+3% 爆擊","+2% 傷害"],"4038":["+1 HP/秒"],"4040":["+4% 移動速度","+2% 迴避"],"4044":["+12% 拾取範圍","+3% 移動速度"],"4047":["+12% 迴避","-0.5 HP/秒"],"4048":["+2 STR"],"4049":["+5% 傷害"],"4052":["+2 INT"],"4054":["+60 最大 HP","+2 護甲"],"4055":["命中時 +5% 暈眩","+2% 傷害"],"4060":["+8% 傷害"],"4061":["+1 護甲","-3% 受到傷害"],"4066":["-8% 受到傷害"],"4069":["+5% 傷害"],"4073":["+15% 金幣"],"4074":["-5% 受到傷害"],"4077":["+4 冷卻縮減"],"4084":["+5% 範圍"],"4085":["+12% 對頭目與不死族傷害"],"4086":["+5% 爆擊"],"4089":["+1 護甲","-3% 受到傷害"],"4090":["+2 護甲"],"4091":["+5% 爆擊"],"4093":["+25 最大 HP"],"4094":["+8% 投射物速度","+2% 傷害"],"4095":["+5% 迴避"],"4098":["+4% 迴避","+2% 移動速度"],"4100":["+4 冷卻縮減","+15 最大 HP"],"4102":["+8% 迴避","+4% 受到傷害"],"4103":["+4% 範圍"],"4111":["對頭目與菁英傷害 +8%"],"4123":["+12% 移動速度","+2 護甲"],"4125":["+6% 傷害"],"4128":["-15% 受到傷害"],"4131":["+8% 移動速度","移動時 +0.6 HP/秒"],"4137":["對頭目與菁英傷害 +15%","+5% 傷害"],"4143":["+3 護甲","+40 最大 HP"],"4144":["每局可滿血復活一次"],"4147":["+20% 範圍","+10% 傷害"],"4159":["+2 AGI","+5% 迴避"],"4174":["-12% 受到傷害"],"4178":["+4% 移動速度"],"4179":["+1 AGI","+2% 迴避"],"4183":["+1 STR","+4% 傷害"],"4197":["+6% 迴避","+3% 爆擊"],"4199":["+0.6 HP/秒"],"4211":["+6% 移動速度","+3% 迴避"],"4212":["+2 VIT"],"4221":["+6% 移動速度","+5% 對頭目與不死族傷害"],"4266":["+50 最大 HP","+1 護甲"],"4283":["+30 最大 HP","+1 護甲"],"4290":["+50 最大 HP","+0.5 HP/秒"],"4296":["+12% 金幣"],"4306":["+5% 迴避"],"4314":["-6% 受到傷害"],"4328":["-6% 受到傷害","+3% 迴避"],"4524":["+2 STR"],"4525":["+8% 迴避","+3% 爆擊"]};
-  function localizeLoot(category, name, slot, rank, iconKey, catalog) {
+  function localizeLoot(category, name, slot, rank, iconKey, catalog, stats) {
     const key = name.normalize("NFKC").trim().toLowerCase();
     const id = iconKey?.match(/(?:^id:|\/)(\d+)(?:\.[^/]+)?$/)?.[1];
     const item = lootCatalog[category].get("#" + id) || lootCatalog[category].get(key);
-    return [item?.zh || name, slot || item?.slot || catalog?.[iconKey] || catalog?.[key] || "",rank,category === 1 ? cardEffects[item?.id] : undefined,item?.en];
+    return [item?.zh || name, slot || item?.slot || catalog?.[iconKey] || catalog?.[key] || "",rank,category === 1 ? cardEffects[item?.id] : stats,item?.en];
   }
   let lastGearCatalog;
   function refreshLootWindow() {
     if (lootWindow.hidden) return;
     const category = lootCategoryIndex;
-    const runs = new Set([...lootHistory.keys(), ...revealedLoot.keys()]);
+    const runs = new Set([...lootHistory.keys(), ...revealedLoot.keys(), ...settledLoot.keys()]);
     const rows = [...runs].flatMap(run => {
       const sampled = lootHistory.get(run)?.[category] || [];
       const revealed = revealedLoot.get(run)?.[category] || [];
+      const settled = settledLoot.get(run)?.groups[category] || [];
+      if (settled.length > sampled.length && settled.length >= revealed.length) return settled;
+      if (category === 0 && sampled.length === revealed.length &&
+          !sampled.some(row => row[4]?.length) && revealed.some(row => row[4]?.length)) return revealed;
       return sampled.length >= revealed.length ? sampled : revealed;
     });
     let catalog;
     lastGearCatalog = document.documentElement.dataset.roHelperGearSlots;
     try { catalog = JSON.parse(lastGearCatalog || "null"); } catch {}
-    const categorized = rows.map(([name,slot,rank,iconKey]) => localizeLoot(category,name,slot,rank,iconKey,catalog));
+    const categorized = rows.map(([name,slot,rank,iconKey,stats]) => localizeLoot(category,name,slot,rank,iconKey,catalog,stats));
     const selected = lootSelectedSlots[category];
     const filtered = categorized.filter(([,slot]) => selected === "all" || lootFilterSlot(category,slot) === selected);
     const counts = new Map();
@@ -1125,7 +1387,7 @@ function mountGearAssistant() {
     table.style.cssText = "width:100%;border-spacing:0;text-align:left;color:#172c55";
     const heading = document.createElement("thead");
     const labels = document.createElement("tr");
-    const columns = [["裝備","部位","稀有度","數量"],["卡片","部位","效果","數量"],["寵物","數量"]][category];
+    const columns = [["裝備","部位","稀有度","素質","數量"],["卡片","部位","效果","數量"],["寵物","數量"]][category];
     for (const column of columns) {
       const cell = document.createElement("th");
       cell.scope = "col";
@@ -1141,6 +1403,7 @@ function mountGearAssistant() {
       const values = [name];
       if (category !== 2) values.push(slotLabels[slot] || slot || "未辨識部位",
         category === 0 ? tiers[rank] || "階級 " + rank : effects?.join("\n") || "—");
+      if (category === 0) values.push(effects?.join("\n") || "—");
       values.push(String(count));
       values.forEach((value,column) => {
         const cell = document.createElement("td");
@@ -1192,9 +1455,23 @@ function mountGearAssistant() {
     try { return JSON.parse(document.documentElement.dataset.roHelperLive || "null"); }
     catch { return null; }
   }
-  function showTimers(startedAt, battleSeconds) {
+  function readSettledBaseExp(settlement) {
+    const text = settlement?.querySelector(".go-exp")?.textContent.normalize("NFKC") || "";
+    const match = text.match(/(?:Base\s*(?:EXP|經驗(?:值)?)|(?:EXP|經驗(?:值)?)\s*(?:de\s+)?Base|基礎經驗(?:值)?)\s*:\s*\+\s*([\d,. \u00a0\u202f]+)/i);
+    return match ? Number(match[1].replace(/[^\d]/g,"")) : null;
+  }
+  function formatBaseRate(value) {
+    const amount = Math.floor(Math.max(0,value));
+    if (amount < 1000) return String(amount);
+    const [unit,scale] = amount >= 1e9 ? ["b",1e9] : amount >= 1e6 ? ["m",1e6] : ["k",1e3];
+    const tenths = Math.floor(amount / (scale / 10));
+    return Math.floor(tenths / 10) + unit + (tenths % 10 || "");
+  }
+  function showTimers(startedAt, battleSeconds, totalBaseExp = 0) {
+    const elapsed = startedAt === null ? 0 : (performance.now() - startedAt) / 1000;
+    const rate = elapsed > 0 ? formatBaseRate(totalBaseExp * 60 / elapsed) : "—";
     const line = "本局時間 " + formatElapsed(battleSeconds) + "\n本次啟動時間 " +
-      (startedAt === null ? "—" : formatElapsed((performance.now() - startedAt) / 1000));
+      (startedAt === null ? "—" : formatElapsed(elapsed) + " · Base/分 " + rate);
     if (timerDisplay.textContent !== line) timerDisplay.textContent = line;
   }
   showTimers(null);
@@ -1204,11 +1481,12 @@ function mountGearAssistant() {
       return;
     }
     try {
-      (()=>{if(!["ro-survivors.com","ro.hans-webgametw.com"].includes(location.hostname))return;const key="__roMenuHelper";let stageName="", rotation={stage:undefined,completed:0}, rotationRun;const rejectedStages=new Set();const visible=e=>e&&e.getClientRects().length&&!e.disabled&&getComputedStyle(e).visibility==="visible"&&!e.closest("[hidden],[inert],[aria-hidden=true]");const label=e=>e.innerText.trim();const buttons=()=>[...document.querySelectorAll("button,[role=button]")].filter(visible);const click=e=>{last=e;e.click()};let pickerFirstCard=null,pickerReadyAt=0,attemptedCard=null,attempts=0;const blocked=new Map();let previousPosition=null,previousDirection=null,still=0,escapeDirection=-1,escapeUntil=0;let retriedCoordinates=false;let movePulse,nextMenuAt=0,nextCaptureAt=0,lastCoordinateAt=0;let last,held,index=0,departing=false,retriedSoloDialog=false;const route=["d","s","a","w","wd","sd","sa","wa"];const probe=document.createElement("canvas");probe.width=probe.height=128;const ctx=probe.getContext("2d",{willReadFrequently:true});const directions=[[1,0],[0,1],[-1,0],[0,-1]];let captureStatus="正在等候分頁截圖",screenshot=null,requested=false,stamp=0,previousFrame=null;const assess=()=>{const canvas=[...document.querySelectorAll("canvas")].filter(visible).sort((a,b)=>b.width*b.height-a.width*a.height)[0];if((!canvas&&!sharedVideo)||!ctx)return null;try{ctx.clearRect(0,0,128,128);if(sharedVideo?.readyState>=2){const r=canvas?.getBoundingClientRect()||{left:0,top:0,width:innerWidth,height:innerHeight},sx=sharedVideo.videoWidth/innerWidth,sy=sharedVideo.videoHeight/innerHeight;ctx.drawImage(sharedVideo,r.left*sx,r.top*sy,r.width*sx,r.height*sy,0,0,128,128)}else if(screenshot&&Date.now()-stamp<1600){const r=canvas.getBoundingClientRect(),sx=screenshot.width/innerWidth,sy=screenshot.height/innerHeight;ctx.drawImage(screenshot,r.left*sx,r.top*sy,r.width*sx,r.height*sy,0,0,128,128)}else{ctx.drawImage(canvas,0,0,128,128)}const data=ctx.getImageData(0,0,128,128).data;let content=0;const red=(x,y)=>{const i=(128*y+x)*4;return data[i+3]>150&&data[i]>95&&data[i]>1.45*data[i+1]&&data[i]>1.32*data[i+2]};for(let i=0;i<data.length;i+=64)if(data[i+3]>150&&data[i]+data[i+1]+data[i+2]>45)content++;if(content<60)return null;const prior=previousFrame;previousFrame=data;let shiftX=0,shiftY=0,alignment=Infinity;if(prior){for(let dy=-16;dy<=16;dy+=2)for(let dx=-16;dx<=16;dx+=2){let error=0;for(let y=24;y<104;y+=8)for(let x=24;x<104;x+=8){if(x>48&&x<80&&y>48&&y<80)continue;const i=(128*y+x)*4,j=(128*(y+dy)+x+dx)*4;error+=Math.abs(data[i]-prior[j])+Math.abs(data[i+1]-prior[j+1])+Math.abs(data[i+2]-prior[j+2])}if(error<alignment){alignment=error;shiftX=dx;shiftY=dy}}}const moving=(x,y)=>{if(!prior||alignment>3600)return false;const i=(128*y+x)*4,j=(128*(y+shiftY)+x+shiftX)*4;return Math.abs(data[i]-prior[j])+Math.abs(data[i+1]-prior[j+1])+Math.abs(data[i+2]-prior[j+2])>85};return directions.map(([dx,dy])=>{let score=0;for(let step=4;step<=22;step++)for(let side=-5;side<=5;side++){{const x=64+dx*step-dy*side,y=64+dy*step+dx*side;if(red(x,y))score+=12;else if(moving(x,y))score+=step<=12?3:1}}let nearMotion=0,nearRed=0;for(let step=8;step<=16;step++)for(let side=-4;side<=4;side++){const x=64+dx*step-dy*side,y=64+dy*step+dx*side;if(red(x,y))nearRed++;else if(moving(x,y))nearMotion++}const uncertain=!prior||alignment>3600;const unsafe=nearRed>=4||(!uncertain&&nearMotion>=12);let chest=0,loot=0;for(let step=7;step<=22;step++)for(let side=-6;side<=6;side++){const x=64+dx*step-dy*side,y=64+dy*step+dx*side,i=(128*y+x)*4;const r=data[i],g=data[i+1],b=data[i+2],w=23-step;if(r>75&&g>55&&r>g*1.06&&r<g*1.7&&g>b*1.32){const j=i-1024;if(data[j]>data[j+1]*1.12&&data[j+1]>data[j+2]*1.15)chest+=w;else loot+=w}else if(b>70&&b>r*1.24&&b>g*1.12&&data[i+6]<b*0.9)loot+=w}return {score,chest,loot,unsafe,uncertain}})}catch{return null}};const send=(type,k)=>(document.activeElement||document.body).dispatchEvent(new KeyboardEvent(type,{key:k,code:"Key"+k.toUpperCase(),bubbles:true,cancelable:true,keyCode:k.toUpperCase().charCodeAt(0),which:k.toUpperCase().charCodeAt(0)}));const release=()=>{if(held){for(const key of held)send("keyup",key);held=null}};const confirmDrop=createDropConfirmation();const confirmedParty=new WeakSet();let returnedResult;const usedRerolls=new WeakSet();const usedFocus=new WeakSet();const usedBanish=new WeakSet();const startedAt = performance.now();
+      (()=>{if(!["ro-survivors.com","www.ro-survivors.com","ro.hans-webgametw.com"].includes(location.hostname))return;const key="__roMenuHelper";let stageName="", rotation={stage:undefined,completed:0}, rotationRun;const rejectedStages=new Set();const visible=e=>e&&e.getClientRects().length&&!e.disabled&&getComputedStyle(e).visibility==="visible"&&!e.closest("[hidden],[inert],[aria-hidden=true]");const label=e=>e.innerText.trim();const buttons=()=>[...document.querySelectorAll("button,[role=button]")].filter(visible);const click=e=>{last=e;e.click()};let pickerFirstCard=null,pickerReadyAt=0,attemptedCard=null,attempts=0;const blocked=new Map();const trackPickup=createPickupTracker();let previousPosition=null,previousDirection=null,still=0,escapeDirection=-1,escapeUntil=0;let retriedCoordinates=false;let movePulse,nextMenuAt=0,nextCaptureAt=0,lastCoordinateAt=0;let last,held,index=0,departing=false,retriedSoloDialog=false;const route=["d","s","a","w","wd","sd","sa","wa"];const probe=document.createElement("canvas");probe.width=probe.height=128;const ctx=probe.getContext("2d",{willReadFrequently:true});const directions=[[1,0],[0,1],[-1,0],[0,-1]];let captureStatus="正在等候分頁截圖",screenshot=null,requested=false,stamp=0,previousFrame=null;const assess=()=>{const canvas=[...document.querySelectorAll("canvas")].filter(visible).sort((a,b)=>b.width*b.height-a.width*a.height)[0];if((!canvas&&!sharedVideo)||!ctx)return null;try{ctx.clearRect(0,0,128,128);if(sharedVideo?.readyState>=2){const r=canvas?.getBoundingClientRect()||{left:0,top:0,width:innerWidth,height:innerHeight},sx=sharedVideo.videoWidth/innerWidth,sy=sharedVideo.videoHeight/innerHeight;ctx.drawImage(sharedVideo,r.left*sx,r.top*sy,r.width*sx,r.height*sy,0,0,128,128)}else if(screenshot&&Date.now()-stamp<1600){const r=canvas.getBoundingClientRect(),sx=screenshot.width/innerWidth,sy=screenshot.height/innerHeight;ctx.drawImage(screenshot,r.left*sx,r.top*sy,r.width*sx,r.height*sy,0,0,128,128)}else{ctx.drawImage(canvas,0,0,128,128)}const data=ctx.getImageData(0,0,128,128).data;let content=0;const red=(x,y)=>{const i=(128*y+x)*4;return data[i+3]>150&&data[i]>95&&data[i]>1.45*data[i+1]&&data[i]>1.32*data[i+2]};for(let i=0;i<data.length;i+=64)if(data[i+3]>150&&data[i]+data[i+1]+data[i+2]>45)content++;if(content<60)return null;const prior=previousFrame;previousFrame=data;let shiftX=0,shiftY=0,alignment=Infinity;if(prior){for(let dy=-16;dy<=16;dy+=2)for(let dx=-16;dx<=16;dx+=2){let error=0;for(let y=24;y<104;y+=8)for(let x=24;x<104;x+=8){if(x>48&&x<80&&y>48&&y<80)continue;const i=(128*y+x)*4,j=(128*(y+dy)+x+dx)*4;error+=Math.abs(data[i]-prior[j])+Math.abs(data[i+1]-prior[j+1])+Math.abs(data[i+2]-prior[j+2])}if(error<alignment){alignment=error;shiftX=dx;shiftY=dy}}}const moving=(x,y)=>{if(!prior||alignment>3600)return false;const i=(128*y+x)*4,j=(128*(y+shiftY)+x+shiftX)*4;return Math.abs(data[i]-prior[j])+Math.abs(data[i+1]-prior[j+1])+Math.abs(data[i+2]-prior[j+2])>85};return directions.map(([dx,dy])=>{let score=0;for(let step=4;step<=22;step++)for(let side=-5;side<=5;side++){{const x=64+dx*step-dy*side,y=64+dy*step+dx*side;if(red(x,y))score+=12;else if(moving(x,y))score+=step<=12?3:1}}let nearMotion=0,nearRed=0;for(let step=8;step<=16;step++)for(let side=-4;side<=4;side++){const x=64+dx*step-dy*side,y=64+dy*step+dx*side;if(red(x,y))nearRed++;else if(moving(x,y))nearMotion++}const uncertain=!prior||alignment>3600;const unsafe=nearRed>=4||(!uncertain&&nearMotion>=12);let chest=0,loot=0;for(let step=7;step<=22;step++)for(let side=-6;side<=6;side++){const x=64+dx*step-dy*side,y=64+dy*step+dx*side,i=(128*y+x)*4;const r=data[i],g=data[i+1],b=data[i+2],w=23-step;if(r>75&&g>55&&r>g*1.06&&r<g*1.7&&g>b*1.32){const j=i-1024;if(data[j]>data[j+1]*1.12&&data[j+1]>data[j+2]*1.15)chest+=w;else loot+=w}else if(b>70&&b>r*1.24&&b>g*1.12&&data[i+6]<b*0.9)loot+=w}return {score,chest,loot,unsafe,uncertain}})}catch{return null}};const send=(type,k)=>(document.activeElement||document.body).dispatchEvent(new KeyboardEvent(type,{key:k,code:"Key"+k.toUpperCase(),bubbles:true,cancelable:true,keyCode:k.toUpperCase().charCodeAt(0),which:k.toUpperCase().charCodeAt(0)}));const release=()=>{if(held){for(const key of held)send("keyup",key);held=null}};const confirmDrop=createDropConfirmation();const acceptedFinalDialogs=new WeakSet();const confirmedParty=new WeakSet();let returnedResult;let bossLootEmptySince;const bossNamesById = new Map();let settlementSeenAt = 0;const usedRerolls=new WeakSet();const usedFocus=new WeakSet();const usedBanish=new WeakSet();const startedAt = performance.now();
 let battleStartedAt = null;
 let patrolStartedAt = null;
 lootHistory.clear();
 revealedLoot.clear();
+    settledLoot.clear();
 seenLootReveals = new WeakSet();
 currentLootRun = null;
 fallbackLootRun = 0;
@@ -1218,18 +1496,40 @@ const initialLoot = readLivePacket();
 lootBaseline = initialLoot && Math.abs(Date.now() - initialLoot.at) < 750 && initialLoot.lootLog
   ? {id:initialLoot.lootLog.id,counts:initialLoot.lootLog.groups.map(rows => rows.length)} : null;
 refreshLootWindow();
+let settledBaseExp = 0;
+let liveBaseExp = 0;
+let countedBaseSettlement = Boolean(document.querySelector("#gameover:not(.hidden)"));
 showTimers(startedAt);
 const timer=setInterval(()=>{
   const battleHud = document.querySelector("#hud:not(.hidden)");
   const lootPacket = readLivePacket();
+  if (taiwanGame && (!battleHud || stageMode.value !== "boss")) {
+    bossLootEmptySince = undefined;
+    bossNamesById.clear();
+    delete document.documentElement.dataset.roHelperBossCleanup;
+  }
   const settlement = document.querySelector("#gameover:not(.hidden)");
+  if (!settlement) countedBaseSettlement = false;
+  else if (!countedBaseSettlement) {
+    const baseExp = readSettledBaseExp(settlement);
+    if (Number.isFinite(baseExp)) {
+      settledBaseExp += baseExp;
+      countedBaseSettlement = true;
+    }
+  }
   const battleEnded = settlement || document.body.classList?.contains("in-lobby");
-  if (battleEnded) lootBattleActive = false;
+  const choosingCard = battleStartedAt !== null && document.querySelector("#picker:not(.hidden)");
+  if (battleEnded || (!battleHud && !choosingCard)) liveBaseExp = 0;
+  else if (Number.isFinite(lootPacket?.runBaseExp) && Math.abs(Date.now() - lootPacket.at) < 750) {
+    liveBaseExp = lootPacket.runBaseExp;
+  }
+  if (battleEnded && !settlement) lootBattleActive = false;
   if (battleHud && !battleEnded && !lootBattleActive) {
     currentLootRun = "reveal-" + ++fallbackLootRun;
     lootBattleActive = true;
   }
-  if (lootBattleActive && lootPacket?.lootLog && Math.abs(Date.now() - lootPacket.at) < 750) {
+  if ((lootBattleActive || (settlement && currentLootRun)) && lootPacket?.lootLog && Math.abs(Date.now() - lootPacket.at) < 750 &&
+      (!settlement || currentLootRun.startsWith("reveal-") || currentLootRun === lootPacket.lootLog.id)) {
     const snapshot = lootPacket.lootLog;
     if (currentLootRun?.startsWith("reveal-")) {
       const reveals = revealedLoot.get(currentLootRun);
@@ -1242,8 +1542,12 @@ const timer=setInterval(()=>{
     trackLoot(snapshot);
   }
   if (lootBattleActive && currentLootRun) recordLootReveal(currentLootRun);
+  if (!taiwanGame && settlement) {
+    currentLootRun ??= "reveal-" + ++fallbackLootRun;
+    trackSettlementLoot(settlement,currentLootRun);
+  }
+  if (settlement) lootBattleActive = false;
   if (!lootWindow.hidden && lastGearCatalog !== document.documentElement.dataset.roHelperGearSlots) refreshLootWindow();
-  const choosingCard = battleStartedAt !== null && document.querySelector("#picker:not(.hidden)");
   const now = performance.now();
   if (settlement || (!battleHud && !choosingCard)) {
     battleStartedAt = null;
@@ -1255,9 +1559,47 @@ const timer=setInterval(()=>{
       ? packet.battleSeconds : match ? Number(match[1]) * 60 + Number(match[2]) : 0;
     battleStartedAt = now - elapsed * 1000;
   }
-  showTimers(startedAt, battleStartedAt === null ? undefined : (now - battleStartedAt) / 1000);
+  showTimers(startedAt, battleStartedAt === null ? undefined : (now - battleStartedAt) / 1000, settledBaseExp + liveBaseExp);
   if (settlement || !battleHud && !choosingCard) patrolStartedAt = null;
-  if(document.hidden||document.querySelector("#ro-helper-settings[open]")){release();return}if(confirmDrop()){release();return}if(partyMode.value==="member"||partyMode.value==="follow"){const ready=partyReadyButton();if(ready){release();if(!confirmedParty.has(ready)){confirmedParty.add(ready);ready.click();status.textContent="已同意隊伍出發"}return}}const list=buttons();const byId=id=>list.find(e=>e.id===id);const exact=t=>list.find(e=>label(e)===t);const result=byId("btn-restart");if(!result)returnedResult=undefined;const go=byId("stg-go");const partyLeader=partyMode.value==="leader";const followLeader=partyMode.value==="follow";const partyMember=partyMode.value==="member"||followLeader;const difficultyDialog = expeditionDifficultyDialog();
+  document.documentElement.dataset.roHelperSkipChest = chestMode.value === "collect" ? "off" : "on";
+  if(document.hidden||document.querySelector("#ro-helper-settings[open]")){release();return}if (taiwanGame) {
+    const completion = finalStageDialogButton();
+    if (completion) {
+      release();
+      if (!acceptedFinalDialogs.has(completion) && !completion.disabled) {
+        acceptedFinalDialogs.add(completion);
+        status.textContent = "已確認未完待續，正在結算";
+        completion.click();
+      }
+      return;
+    }
+  }
+  if(confirmDrop()){release();return}
+  if (taiwanGame && stageMode.value === "boss" && battleHud && lootPacket?.bossFarm && Math.abs(Date.now()-lootPacket.at)<750) {
+    const farm = lootPacket.bossFarm;
+    for (const [id,name] of farm.bosses) if (typeof name === "string" && name) bossNamesById.set(id,name);
+    const seen = readNames("ro-helper-seen-bosses");
+    const learned = [...new Set([...seen,...bossNamesById.values()])];
+    if (learned.length !== seen.length) { writeSetting("ro-helper-seen-bosses",JSON.stringify(learned)); refreshBossOptions(); }
+    const target = bossTarget.value.trim();
+    const scheduled = farm.maze.find(([,seconds]) => target && mazeBossTimes.get(target) === seconds)?.[0];
+    const defeated = target && Object.entries(farm.kills).some(([id,count]) => count > 0 &&
+      (id === scheduled || bossKey(id) === bossKey(target) || bossKey(bossNamesById.get(id) || "") === bossKey(target)));
+    if (farm.solo && defeated) {
+      document.documentElement.dataset.roHelperBossCleanup = "on";
+      delete document.documentElement.dataset.roHelperFinishVictory;
+      if (!Array.isArray(farm.gear) || farm.gear.length) bossLootEmptySince = undefined;
+      else bossLootEmptySince ??= lootPacket.battleSeconds;
+      const endRun = document.getElementById("btn-endrun");
+      if (farm.playing && bossLootEmptySince !== undefined &&
+          lootPacket.battleSeconds - bossLootEmptySince >= 1 && endRun && !endRun.disabled) {
+        release();
+        status.textContent = "已擊敗 " + target + "，正在結算並重刷";
+        endRun.click();
+        return;
+      }
+    }
+  }if(partyMode.value==="member"||partyMode.value==="follow"){const ready=partyReadyButton();if(ready){release();if(!confirmedParty.has(ready)){confirmedParty.add(ready);ready.click();status.textContent="已同意隊伍出發"}return}}const list=buttons();const byId=id=>list.find(e=>e.id===id);const exact=t=>list.find(e=>label(e)===t);const result=byId("btn-restart");if(!result){returnedResult=undefined;settlementSeenAt=0;}const go=byId("stg-go");const partyLeader=partyMode.value==="leader";const followLeader=partyMode.value==="follow";const partyMember=partyMode.value==="member"||followLeader;const difficultyDialog = expeditionDifficultyDialog();
 const proposal = partyLeader ? partyProposalButton(difficultyDialog, visible) : null;
 const field = proposal || (difficultyDialog && list.find(button => button === difficultyDialog.querySelector("#npc-options button.primary")));
 if (partyLeader && difficultyDialog && !proposal) {
@@ -1277,7 +1619,7 @@ if (partyLeader && difficultyDialog && !proposal) {
   }
   return;
 }
-if(field){release();if(partyMember||partyLeader&&!proposal)return;if(last===field)return;const difficulty=getDifficulty(proposal?"party":"solo");const difficultyError=applyDifficulty(difficultyDialog,difficulty);if(difficultyError){status.textContent=difficultyError;return}if(proposal){retriedSoloDialog=false;partyWaitingUntil=Date.now()+30000;status.textContent="已發起隊伍出發，等待隊員確認"}else status.textContent=difficulty?"已套用助手的難度設定，正在進場":"使用遊戲目前的難度，正在進場";click(field);return}const captain=byId("lobby-prompt");const stageCards=[...document.querySelectorAll("#stg-list .stg-card")].filter(e=>e.getClientRects().length&&getComputedStyle(e).visibility==="visible"&&!e.closest("[hidden],[inert],[aria-hidden=true]"));
+if(field){release();if(partyMember||partyLeader&&!proposal)return;if(last===field)return;readDifficultyLimits(difficultyDialog);const difficulty=getDifficulty(proposal?"party":"solo");const difficultyError=applyDifficulty(difficultyDialog,difficulty);if(difficultyError){status.textContent=difficultyError;return}if(proposal){retriedSoloDialog=false;partyWaitingUntil=Date.now()+30000;status.textContent="已發起隊伍出發，等待隊員確認"}else status.textContent=difficulty?"已套用助手的難度設定，正在進場":"使用遊戲目前的難度，正在進場";click(field);return}const captain=byId("lobby-prompt");const stageCards=[...document.querySelectorAll("#stg-list .stg-card")].filter(e=>e.getClientRects().length&&getComputedStyle(e).visibility==="visible"&&!e.closest("[hidden],[inert],[aria-hidden=true]"));
 const selectedStages = rotationStages();
 const repeats = repeatCount(stageRepeats.value);
 if (!selectedStages.includes(rotation.stage)) rotation = {stage: selectedStages[0], completed: 0};
@@ -1319,7 +1661,7 @@ if (cards[0] !== pickerFirstCard) {
   attempts = 0;
 }
 if (!cards.length || Date.now() < Math.max(pickerReadyAt, nextMenuAt)) return;
-const treasureName=e=>label(e).split(/\n/).map(t=>t.trim()).find(t=>t&&!/^(?:[123]|普通|優良|稀有|史詩|傳說|神話|技能|新[！!])$/.test(t))||"";if(chest){const seen=[...new Set([...treasureList(),...cards.map(e=>normalizeTreasure(treasureName(e))).filter(Boolean)])];writeSetting("ro-helper-treasures",JSON.stringify(seen))}else{const seen=[...new Set([...skillList(),...cards.map(treasureName).filter(Boolean)])];writeSetting("ro-helper-seen-skills",JSON.stringify(seen))}if (!chest) {
+const treasureName=e=>label(e).split(/\n/).map(t=>t.trim()).find(t=>t&&!/^(?:[123]|普通|優良|稀有|史詩|傳說|神話|技能|新[！!])$/.test(t))||"";if(chest){const seen=[...new Set([...treasureList(),...cards.map(e=>normalizeTreasure(treasureName(e))).filter(Boolean)])];writeSetting("ro-helper-treasures",JSON.stringify(seen))}else{const seen=[...new Set([...skillList(),...cards.map(card => skillCardName(card) || treasureName(card)).filter(Boolean)])];writeSetting("ro-helper-seen-skills",JSON.stringify(seen))}if (!chest) {
   const picker = document.querySelector("#picker:not(.hidden):not(.closing)");
   const banish = findSkillBanish(picker, banishSkills(), banishBasic(), visible, usedBanish);
   if (banish) {
@@ -1346,13 +1688,14 @@ if (!chest && arrowSetting("mode") === "on") {
   const equipped = document.querySelectorAll("#lu-sockets [data-skill], #skillbar [data-skill]");
   const owned = [...equipped].some(slot => elementalArrows.some(([id]) => id === slot.dataset.skill));
   elementalChoice = selectElementalArrow(cards,owned,
-    arrowSetting("starter") || "coldbolt",arrowSetting("preference") || "shots");
+    starterArrows(),arrowSetting("preference") || "shots");
 }
+const startingChoice = chest ? null : selectStartingSkill(cards,starterArrows(),arrowSetting("mode") === "on");
 const priorities = chest ? treasurePriority().filter(Boolean) : skills();
 const preferred = priorities.map(name => cards.find(card => chest
   ? normalizeTreasure(treasureName(card)) === normalizeTreasure(name)
-  : label(card).split(/\n/).some(line => line.trim() === name) || label(card).includes(name))).find(Boolean);
-if (autoReroll && priorities.length && cards.length && !elementalChoice && !sameSkill && !preferred) {
+  : skillMatches(name, skillCardName(card)) || label(card).includes(name))).find(Boolean);
+if (autoReroll && priorities.length && cards.length && !elementalChoice && !startingChoice && !sameSkill && !preferred) {
   const picker = document.querySelector("#picker:not(.hidden):not(.closing)");
   const reroll = availableReroll(picker, visible, usedRerolls);
   if (reroll) {
@@ -1363,7 +1706,7 @@ if (autoReroll && priorities.length && cards.length && !elementalChoice && !same
     return;
   }
 }
-const card = elementalChoice || sameSkill || preferred || attemptedCard || (chest ? cards[Math.floor(Math.random() * cards.length)] : cards[0]);
+const card = elementalChoice || startingChoice || sameSkill || preferred || attemptedCard || (chest ? cards[Math.floor(Math.random() * cards.length)] : cards[0]);
 const index = Number(card.dataset.i);
 if (!Number.isInteger(index) || index < 0 || index > 8) return;
 const number = String(index + 1);
@@ -1381,8 +1724,18 @@ attempts++;
 nextMenuAt = Date.now() + (attempts >= 2 ? 650 : 320);
 return;
 }else if (result) {
+  if (!taiwanGame) {
+    settlementSeenAt ||= Date.now();
+    if (Date.now() - settlementSeenAt < 800) { release(); return; }
+  }
+  if (!taiwanGame && [...document.querySelectorAll("#loot-rolls .lr-row")].some(visible)) {
+    release();
+    status.textContent = "等待隊伍掉落分配完成";
+    return;
+  }
   if (returnedResult === result) return;
   returnedResult = result;
+  trackPickup([], [0,0], false, Date.now(), true);
   if (rotationRun && rotationRun.stage === rotation.stage && stageMode.value === "rotation") {
     rotation = advanceRotation(rotation, selectedStages, repeats);
   }
@@ -1405,7 +1758,8 @@ return;
   status.textContent = "Gear｜自動巡走";
   return;
 }retriedCoordinates=false;const ignoreMonsterCollision=forceGearPickup&&collisionMode.value==="always";const zones=Array.isArray(packet.hazards)?packet.hazards:[];const shelter=bellDirection(packet,zones);if(shelter!==null){status.textContent=shelter<0?"座標｜留在金鐘安全區":"座標｜前往金鐘安全區";if(shelter>=0){held=route[shelter];for(const key of held)send("keydown",key);clearTimeout(movePulse);movePulse=setTimeout(release,145)}return}const originClearance=hazardClearance(zones,...packet.player);const evadingRed=originClearance<=0;
-const cleanup = packet.cleanup;
+const bossGear = document.documentElement.dataset.roHelperBossCleanup === "on" ? packet.bossFarm?.gear : null;
+const cleanup = Array.isArray(bossGear) ? {gear:bossGear,bossFarm:true,canFinish:false} : packet.cleanup;
 const leader = !cleanup && followLeader && Array.isArray(packet.leader) && packet.leader.length === 2 &&
   packet.leader.every(Number.isFinite) ? packet.leader : null;
 const leaderDistance = leader ? Math.hypot(packet.player[0]-leader[0],packet.player[1]-leader[1]) : Infinity;
@@ -1428,22 +1782,69 @@ const drops = cleanup?.gear ?? packet.drops;
 if (cleanup && !drops.length && !evadingRed) {
   previousDirection = null;
   if (cleanup.canFinish && cleanup.ready) document.documentElement.dataset.roHelperFinishVictory = String(Date.now());
+  if (cleanup.bossFarm) {
+    status.textContent = "指定首領已擊敗，確認裝備及卡片已撿完";
+    return;
+  }
+  if (cleanup.deferredPartyLoot) {
+    status.textContent = "等待國際版隊伍結算與掉落擲骰";
+    return;
+  }
+  if (cleanup.waitForNaturalSettlement) {
+    status.textContent = "等待紫色問號掉落登記與遊戲結算";
+    return;
+  }
   status.textContent = cleanup.canFinish ? (cleanup.ready ? "清場完成，正在返回" : "打王完成，確認掉落物中") : "裝備與卡片已撿完，等待隊伍結算";
   return;
 }
-const canOpenChest=Number.isFinite(packet.zeny)&&Number.isFinite(packet.chestCost)&&packet.zeny>=packet.chestCost;const scores=packet.routes.map(([x,y,walkable])=>{const [px,py]=packet.player;const segment=(ex,ey)=>{const vx=x-px,vy=y-py,q=Math.max(0,Math.min(1,((ex-px)*vx+(ey-py)*vy)/(vx*vx+vy*vy||1)));return Math.hypot(ex-px-q*vx,ey-py-q*vy)};let unsafe=!walkable,score=0,chest=0,loot=0,gear=0,clearance=Infinity,pressure=0;for(const [ex,ey] of packet.enemies){const here=Math.hypot(ex-px,ey-py),there=Math.hypot(ex-x,ey-y);clearance=Math.min(clearance,there);pressure+=Math.max(0,150-there)**2;if(!ignoreMonsterCollision&&segment(ex,ey)<35&&there<here+8)unsafe=true;if(!ignoreMonsterCollision&&there<125)score+=(125-there)/15}for(const [kind,dx,dy] of drops){const dist=Math.hypot(dx-px,dy-py),next=cleanup?segment(dx,dy):Math.hypot(dx-x,dy-y);const equipment=kind==="loot"||kind==="card";if((cleanup||dist<(equipment?800:480))&&next<dist){const value=(dist-next)/(1+dist/90);if(equipment)continue;if(kind==="chest"){if(canOpenChest)chest=Math.max(chest,value)}else loot=Math.max(loot,value)}}if (packet.gearWaypoint) {
+const chests = chestMode.value === "avoid" ? packet.drops.filter(([kind]) => kind === "chest") : [];
+const canOpenChest=chestMode.value === "collect" && Number.isFinite(packet.zeny)&&Number.isFinite(packet.chestCost)&&packet.zeny>=packet.chestCost;const intervalSeconds = Number(magnetInterval.value) * 60;
+const magnetDue = intervalSeconds > 0 && packet.battleSeconds - (packet.lastMagnetAt ?? 0) >= intervalSeconds;
+const eligibleDrops = magnetDue ? drops : drops.filter(([kind]) => kind !== "magnet");
+const pickup=trackPickup(eligibleDrops,packet.player,canOpenChest,Date.now(),Boolean(cleanup||leader||evadingRed));const scores=packet.routes.map(([x,y,walkable])=>{const [px,py]=packet.player;const segment=(ex,ey)=>{const vx=x-px,vy=y-py,q=Math.max(0,Math.min(1,((ex-px)*vx+(ey-py)*vy)/(vx*vx+vy*vy||1)));return Math.hypot(ex-px-q*vx,ey-py-q*vy)};let unsafe=!walkable,score=0,chest=0,loot=0,gear=0,clearance=Infinity,pressure=0;for(const [ex,ey] of packet.enemies){const here=Math.hypot(ex-px,ey-py),there=Math.hypot(ex-x,ey-y);clearance=Math.min(clearance,there);pressure+=Math.max(0,150-there)**2;if(!ignoreMonsterCollision&&segment(ex,ey)<35&&there<here+8)unsafe=true;if(!ignoreMonsterCollision&&there<125)score+=(125-there)/15}if (pickup) {
+  const progress = pickup.distance - Math.hypot(pickup.x-x,pickup.y-y);
+  const value = progress > 3 ? progress / (1 + pickup.distance / 90) : 0;
+  if (pickup.kind === "chest") chest = value;
+  else loot = value;
+}if (packet.gearWaypoint) {
   const {x:gx,y:gy} = packet.gearWaypoint;
   const here = Math.hypot(gx-px,gy-py);
   const there = segment(gx,gy);
   gear = Math.max(0,here-there);
-  if (!cleanup) loot = Math.max(loot,gear/3);
+  if (!cleanup && !pickup) loot = gear/3;
 }
-const endClearance=hazardClearance(zones,x,y);const checks=Math.max(1,Math.ceil(Math.hypot(x-px,y-py)/6));const crossesRed=Array.from({length:checks},(_,i)=>(i+1)/checks).some(f=>hazardClearance(zones,px+(x-px)*f,py+(y-py)*f)<=0);return {score,chest,loot,gear,endClearance,crossesRed,unsafe,walkable,uncertain:false,escapeCost:pressure-Math.min(150,clearance)*35}});if(scores){const pos=fresh?packet.player.map(Math.round).join(","):view.match(/\(\s*(-?\d+)\s*,\s*(-?\d+)\s*\)/)?.slice(1).join(",");if(pos&&pos===previousPosition&&previousDirection&&Date.now()-lastCoordinateAt>=800){const id=pos+":"+previousDirection;blocked.set(id,Date.now()+6500);still++}else{still=0}if(pos!==previousPosition||Date.now()-lastCoordinateAt>=800){previousPosition=pos;lastCoordinateAt=Date.now()}for(const [id,until] of blocked)if(until<Date.now())blocked.delete(id);status.textContent="戰鬥中：依紅色區域與移動物體選路";const start=index++%route.length;let escaping=false;let candidates=Array.from({length:route.length},(_,i)=>(start+i)%route.length).filter(i=>!scores[i].unsafe&&!scores[i].crossesRed&&!blocked.has(pos+":"+route[i]));const forced=forceGearPickup&&!evadingRed&&!followLeader?scores.map((_,i)=>i).filter(i=>scores[i].walkable&&!scores[i].crossesRed&&scores[i].gear>0&&!blocked.has(pos+":"+route[i])):[];if(forced.length)candidates=forced;if(!candidates.length&&fresh){const open=scores.map((_,i)=>i).filter(i=>scores[i].walkable&&!scores[i].crossesRed);const clear=open.filter(i=>!scores[i].unsafe);const unblocked=open.filter(i=>!blocked.has(pos+":"+route[i]));candidates=clear.length?clear:unblocked.length?unblocked:open;escaping=candidates.length>0&&!clear.length}if(evadingRed){candidates=scores.map((_,i)=>i).filter(i=>scores[i].walkable&&scores[i].endClearance>originClearance);escaping=false}if(!candidates.length){previousDirection=null;if(evadingRed){status.textContent="座標｜紅圈內，找不到脫離方向";return}status.textContent=fresh?"座標｜目前沒有可通行方向":"畫面｜沒有可走方向，請確認座標來源";return}const lowest=Math.min(...candidates.map(i=>scores[i].score));let viable=candidates.filter(i=>scores[i].score<=lowest+3);
-if (cleanup && !evadingRed && !escaping) {
+const crossesAvoidedChest = !evadingRed && crossesChest(packet.player,x,y,chests);
+const endClearance=hazardClearance(zones,x,y);const checks=Math.max(1,Math.ceil(Math.hypot(x-px,y-py)/6));const crossesRed=Array.from({length:checks},(_,i)=>(i+1)/checks).some(f=>hazardClearance(zones,px+(x-px)*f,py+(y-py)*f)<=0);return {score,chest,loot,gear,endClearance,crossesRed,crossesAvoidedChest,unsafe,walkable,uncertain:false,escapeCost:pressure-Math.min(150,clearance)*35}});if(scores){const pos=fresh?packet.player.map(Math.round).join(","):view.match(/\(\s*(-?\d+)\s*,\s*(-?\d+)\s*\)/)?.slice(1).join(",");if(pos&&pos===previousPosition&&previousDirection&&Date.now()-lastCoordinateAt>=800){const id=pos+":"+previousDirection;blocked.set(id,Date.now()+6500);still++}else{still=0}if(pos!==previousPosition||Date.now()-lastCoordinateAt>=800){previousPosition=pos;lastCoordinateAt=Date.now()}for(const [id,until] of blocked)if(until<Date.now())blocked.delete(id);status.textContent="戰鬥中：依紅色區域與移動物體選路";const start=index++%route.length;let escaping=false;let candidates=Array.from({length:route.length},(_,i)=>(start+i)%route.length).filter(i=>!scores[i].unsafe&&!scores[i].crossesRed&&!scores[i].crossesAvoidedChest&&!blocked.has(pos+":"+route[i]));const forced=forceGearPickup&&!evadingRed&&(!followLeader||cleanup)?scores.map((_,i)=>i).filter(i=>scores[i].walkable&&!scores[i].crossesRed&&!scores[i].crossesAvoidedChest&&scores[i].gear>0&&!blocked.has(pos+":"+route[i])):[];
+let usingMagnet = false;
+if (cleanup && drops.length && !evadingRed && !forced.length && packet.magnetWaypoint &&
+    !candidates.some(i => scores[i].gear > 0)) {
+  const {x,y} = packet.magnetWaypoint;
+  const distance = Math.hypot(packet.player[0]-x,packet.player[1]-y);
+  const steps = candidates.map(i => ({i,distance:Math.hypot(packet.routes[i][0]-x,packet.routes[i][1]-y)}))
+    .filter(step => step.distance < distance);
+  const best = steps.reduce((nearest,step) => !nearest || step.distance < nearest.distance ? step : nearest,null);
+  if (best) {
+    forced.push(best.i);
+    usingMagnet = true;
+  }
+}
+if (!forced.length && forceGearPickup && cleanup && drops.length && packet.gearWaypoint && !evadingRed) {
+  // Take a walkable detour when the waypoint cannot be approached directly.
+  const {x,y} = packet.gearWaypoint;
+  const detours = scores.map((_,i) => i).filter(i => scores[i].walkable && !scores[i].crossesRed &&
+    !scores[i].crossesAvoidedChest && !blocked.has(pos+":"+route[i]));
+  detours.sort((a,b) => Math.hypot(packet.routes[a][0]-x,packet.routes[a][1]-y) -
+    Math.hypot(packet.routes[b][0]-x,packet.routes[b][1]-y));
+  if (detours.length) forced.push(detours[0]);
+}
+if(forced.length)candidates=forced;if(!candidates.length&&fresh){const open=scores.map((_,i)=>i).filter(i=>scores[i].walkable&&!scores[i].crossesRed&&!scores[i].crossesAvoidedChest);const clear=open.filter(i=>!scores[i].unsafe);const unblocked=open.filter(i=>!blocked.has(pos+":"+route[i]));candidates=clear.length?clear:unblocked.length?unblocked:open;escaping=candidates.length>0&&!clear.length}if(evadingRed){candidates=scores.map((_,i)=>i).filter(i=>scores[i].walkable&&scores[i].endClearance>originClearance);escaping=false}if(!candidates.length){previousDirection=null;if(evadingRed){status.textContent="座標｜紅圈內，找不到脫離方向";return}status.textContent=fresh?"座標｜目前沒有可通行方向":"畫面｜沒有可走方向，請確認座標來源";return}const lowest=Math.min(...candidates.map(i=>scores[i].score));let viable=candidates.filter(i=>scores[i].score<=lowest+3);
+if (cleanup && !evadingRed && !escaping && !forced.length) {
   viable = viable.filter(i => scores[i].gear > 0);
   if (!viable.length) {
     previousDirection = null;
-    status.textContent = "清場收尾：目前無法安全靠近裝備或卡片";
+    status.textContent = forceGearPickup
+      ? "清場收尾：找不到可通往裝備或卡片的路線"
+      : "清場收尾：目前無法安全靠近裝備或卡片";
     return;
   }
 }
@@ -1465,7 +1866,12 @@ if (leader) {
   const [bx,by] = packet.routes[best];
   return Math.hypot(ax-leader[0],ay-leader[1]) < Math.hypot(bx-leader[0],by-leader[1]) ? i : best;
 }
-return a.chest>b.chest||(a.chest===b.chest&&(a.loot>b.loot||(a.loot===b.loot&&a.score<b.score)))?i:best});const chosen=scores[best];if(escaping){if(escapeDirection!==best||Date.now()>=escapeUntil){escapeDirection=best;escapeUntil=Date.now()+650}}else{escapeDirection=-1;escapeUntil=0}status.textContent=evadingRed?"座標｜閃避紅圈":forced.length?"座標｜強制撿裝備／卡片":escaping?"座標｜走位：脫離怪群":cleanup?"清場收尾：撿取裝備與卡片":followLeader?"座標｜跟隨隊長":(fresh?"座標｜":"畫面｜")+(chosen.chest?"走位：靠近疑似寶箱":chosen.loot?"走位：靠近疑似掉落物":"走位：巡找掉落物");held=route[best];previousDirection=held;if(still>=2)status.textContent="座標未變：換方向避開卡點";for(const key of held)send("keydown",key);clearTimeout(movePulse);movePulse=setTimeout(release,escaping?155:chosen.uncertain?80:145)}else{status.textContent="已暫停走位："+captureStatus+""}}else if(picking){status.textContent="偵測到升級，但找不到可選卡片"}return}previousPosition=null;previousDirection=null;escapeDirection=-1;escapeUntil=0;release();if(picking)status.textContent="選擇技能："+label(next).split(/\n/).slice(0,4).join(" ");if(next!==last||next===go||next===stage)click(next)},160);const stop=()=>{if(sharedVideo){sharedVideo.srcObject.getTracks().forEach(track=>track.stop());sharedVideo=null}clearInterval(timer);clearTimeout(movePulse);release();rotationProgress.textContent="";window.removeEventListener("blur",release);
+if (a.chest !== b.chest) return a.chest > b.chest ? i : best;
+if (a.loot !== b.loot) return a.loot > b.loot ? i : best;
+if (Math.abs(a.score-b.score) < 0.5 && (route[i] === previousDirection || route[best] === previousDirection)) {
+  return route[i] === previousDirection ? i : best;
+}
+return a.score < b.score ? i : best});const chosen=scores[best];if(escaping){if(escapeDirection!==best||Date.now()>=escapeUntil){escapeDirection=best;escapeUntil=Date.now()+650}}else{escapeDirection=-1;escapeUntil=0}status.textContent=evadingRed?"座標｜閃避紅圈":usingMagnet?"清場收尾：改撿可到達的磁鐵":forced.length?"座標｜強制撿裝備／卡片":escaping?"座標｜走位：脫離怪群":cleanup?"清場收尾：撿取裝備與卡片":followLeader?"座標｜跟隨隊長":(fresh?"座標｜":"畫面｜")+(chosen.chest?"走位：靠近寶箱":chosen.loot?(pickup?.kind === "magnet" ? "走位：靠近磁鐵" : "走位：靠近掉落物"):"走位：巡找掉落物");held=route[best];previousDirection=held;if(still>=2)status.textContent="座標未變：換方向避開卡點";for(const key of held)send("keydown",key);clearTimeout(movePulse);movePulse=setTimeout(release,escaping?155:chosen.uncertain?80:145)}else{status.textContent="已暫停走位："+captureStatus+""}}else if(picking){status.textContent="偵測到升級，但找不到可選卡片"}return}previousPosition=null;previousDirection=null;escapeDirection=-1;escapeUntil=0;release();if(picking)status.textContent="選擇技能："+label(next).split(/\n/).slice(0,4).join(" ");if(next!==last||next===go||next===stage)click(next)},160);const stop=()=>{delete document.documentElement.dataset.roHelperBossCleanup;delete document.documentElement.dataset.roHelperSkipChest;if(sharedVideo){sharedVideo.srcObject.getTracks().forEach(track=>track.stop());sharedVideo=null}clearInterval(timer);clearTimeout(movePulse);release();rotationProgress.textContent="";window.removeEventListener("blur",release);
   delete document.documentElement.dataset.roHelperFinishVictory;
   delete window[key];
   updateAssistantButton(false);
@@ -1511,7 +1917,7 @@ updateAssistantButton(true);
   content.style.cssText = "padding:5px;max-width:260px;max-height:calc(100vh - 64px);overflow:auto";
   const actions = document.createElement("div");
   actions.style.cssText = "display:flex;flex-wrap:wrap;gap:4px";
-  for (const control of [button, gpuSaver, movementToggle, gearMovementMode, lootButton, settings, treasureButton, difficultyButton, rollChoice, partyMode, rerollToggle, skillFocus.select, ...treasureFocus.map(choice => choice.select)]) {
+  for (const control of [button, gpuSaver, movementToggle, gearMovementMode, lootButton, settings, treasureButton, difficultyButton, chestMode, magnetSetting, rollChoice, partyMode, rerollToggle, skillFocus.select, ...treasureFocus.map(choice => choice.select)]) {
     control.style.cssText = "background:#234b96;color:white;padding:5px 7px;border-radius:5px;cursor:pointer";
     actions.append(control);
   }
@@ -1647,6 +2053,7 @@ updateAssistantButton(true);
     activeAccount = nextAccount;
     lootHistory.clear();
     revealedLoot.clear();
+    settledLoot.clear();
     refreshLootWindow();
     refreshGpuSaver(false);
     loadStageSettings();
@@ -1654,6 +2061,8 @@ updateAssistantButton(true);
     forceGearPickup = readSetting("ro-helper-force-gear") === "on";
     autoReroll = readSetting("ro-helper-auto-reroll") !== "off";
     collisionMode.value = readSetting("ro-helper-collision-mode") === "always" ? "always" : "pickup";
+    loadChestMode();
+    loadMagnetInterval();
     rollChoice.value = readSetting("ro-helper-roll-choice") || "";
     const role = readSetting("ro-helper-party-role");
     partyMode.value = ["off","leader","member","follow"].includes(role)
