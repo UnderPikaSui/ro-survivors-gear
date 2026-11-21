@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 75.1
+// @version 75.2
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -2698,7 +2698,7 @@ function createLootSnapshotPublisher(snapshot,root,clock=Date.now) {
       const data=snapshot(game),json=JSON.stringify(data);
       entry={at:now,counts,id:data.id,json};cache.set(game,entry);
     }
-    if(root.dataset.roHelperLootSnapshot!==entry.json)root.dataset.roHelperLootSnapshot=entry.json;
+    const target=root || document.documentElement;if(target && target.dataset.roHelperLootSnapshot!==entry.json)target.dataset.roHelperLootSnapshot=entry.json;
     return entry.id;
   };
 }
@@ -2836,7 +2836,7 @@ function locateBattleLoop(source) {
   };
   const publishLootSnapshot=createLootSnapshotPublisher(lootSnapshot,document.documentElement);
   let active, direction, loading;
-  window.__roGearConnect=()=>findDirection();
+  window.__roGearConnect=async()=>{await findDirection();const raw=document.documentElement?.dataset.roHelperLive;let packet;try{packet=JSON.parse(raw)}catch{};return {ok:true,pending:!(packet&&Date.now()-packet.at>=0&&Date.now()-packet.at<750),phase:document.documentElement?.dataset.roHelperPhase||"手機座標接入中，等待角色資料"};};
   async function findDirection() {
     if (direction || loading) return;
     const scripts = [...document.querySelectorAll('script[type="module"][src]')].map(script => script.src);
@@ -3014,6 +3014,7 @@ function installGpuRenderGate(renderer, root) {
   Object.defineProperty = function(target, key, descriptor) {
     const result = defineProperty(target,key,descriptor);
     capturePlayer(target,key);
+    if(key === "player" && !active) queueMicrotask(()=>capturePlayer(target,key));
     return result;
   };
   defineProperty(Object.prototype,"player",{
@@ -3021,6 +3022,7 @@ function installGpuRenderGate(renderer, root) {
     set(value) {
       defineProperty(this,"player",{value,writable:true,enumerable:true,configurable:true});
       capturePlayer(this,"player");
+      if(!active)queueMicrotask(()=>capturePlayer(this,"player"));
     }
   });
   let lastAttempt = -5000;
@@ -3134,7 +3136,7 @@ function installGpuRenderGate(renderer, root) {
 
     return {id:'ro-helper-gear',onMessage,async sendMessage(message){
       if(message.type==='connect-ro-coordinates'){
-        await window.__roGearConnect?.();return {ok:!!window.__roGearCapture};
+        const state=await window.__roGearConnect?.();return state || {ok:false,error:"手機座標接入口尚未啟動，請確認只啟用一份助手後重新整理遊戲"};
       }
       return await new Promise(resolve=>{
         let resolved=false;const timer=setTimeout(()=>{if(!resolved){resolved=true;resolve({ok:false,error:'Gear 網路回應逾時'})}},20000);
@@ -3903,7 +3905,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V75.1 網頁控制特別版";
+  const versionName = "Gear V75.2 網頁控制特別版";
   let runtimeInvalidated = false;
   const button = document.createElement("button");
   button.type = "button";
@@ -5176,7 +5178,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
         if (!ensureRuntime()) return;
         if (!result?.ok) throw new Error(result?.error || "背景程式沒有回應，請重新載入擴充功能後重整遊戲");
         coordinateConnectedAt = Date.now();
-        coordinateStatus = "已找到戰鬥迴圈，等待座標";
+        coordinateStatus = result.pending ? (result.phase || "手機座標接入中，等待角色資料") : "已找到戰鬥迴圈，等待座標";
         if (showWhileStopped || window.__roMenuHelper) status.textContent = coordinateStatus;
       })
       .catch(error => {
@@ -9367,7 +9369,7 @@ showTimers(startedAt);
 let hansHighDifficultyUntil = 0;
 const levelCardStop = createLevelCardStop();
 window.addEventListener("pagehide",levelCardStop.reset);
-const timer=setInterval(()=>{
+const timer=setInterval(()=>{try {
   if (recycleReading || recycleDialog?.open || cardRecycleActive || upgradeActive || document.getElementById("ro-helper-upgrade-settings")?.open || document.getElementById("ro-helper-transfer-settings")?.open) { release(); return; }
   if (handleRefreshDialog()) { release(); return; }
   if (readingGsAdvice) { release(); return; }
@@ -9720,7 +9722,7 @@ if (!partyMember && stageCards.length && !stageName) {
   status.textContent = "請在助手的關卡設定選擇關卡";
   return;
 }
-const hud=document.body.innerText;const visiblePicker=document.querySelector("#picker:not(.hidden)");const pickerTitle=visiblePicker?.querySelector("#pk-title")?.textContent || "";const pickerSubtitle=visiblePicker?.querySelector("#pk-sub")?.textContent || "";const chest=!!visiblePicker && /寶箱|寶物箱|(?:treasure\s+)?chest|cofre/i.test(pickerTitle);const picking=!!visiblePicker && (chest || /升級|level\s*up/i.test(pickerTitle) || /(?:選擇|強化)\s*技能|(?:choose|upgrade)\s+(?:a\s+)?skill|elige una habilidad|mejora una habilidad/i.test(pickerSubtitle));if (!worldBossActive() && inBattleReadyForBank(battleHud,visiblePicker) && levelCardStop.act(picking ? visiblePicker : null,chest,discoveryBonus,
+const hud=document.body.innerText;const pickerNode=document.querySelector("#picker:not(.hidden):not(.closing)");const visiblePicker=visible(pickerNode)?pickerNode:null;const pickerTitle=visiblePicker?.querySelector("#pk-title")?.textContent || "";const pickerSubtitle=visiblePicker?.querySelector("#pk-sub")?.textContent || "";const chest=!!visiblePicker && /寶箱|寶物箱|(?:treasure\s+)?chest|cofre/i.test(pickerTitle);const picking=!!visiblePicker && (chest || /升級|level\s*up/i.test(pickerTitle) || /(?:選擇|強化)\s*技能|(?:choose|upgrade)\s+(?:a\s+)?skill|elige una habilidad|mejora una habilidad/i.test(pickerSubtitle));if (!worldBossActive() && inBattleReadyForBank(battleHud,visiblePicker) && levelCardStop.act(picking ? visiblePicker : null,chest,discoveryBonus,
   Math.abs(Date.now()-lootPacket?.at) < 750 ? lootPacket.skillTargets : null)) { release(); return; }
 const inBattle=Boolean(battleHud)||(/\bEXP\b/.test(hud)&&/\b\d{2}:\d{2}\b/.test(hud)&&/\(\s*-?\d+\s*,\s*-?\d+\s*\)/.test(hud));if(inBattle){partyWaitingUntil=0;retriedSoloDialog=false}if(partyLeader&&!inBattle&&!picking&&!result&&Date.now()<partyWaitingUntil){release();return}if(partyMember&&!inBattle&&!picking&&!result){release();status.textContent=followLeader?"跟隨隊長：等待隊伍出發確認":"隊員模式：等待隊伍出發確認";return}if(!stageName&&!captain&&!inBattle&&!picking&&!result){status.textContent="請先開啟遠征選單";return}const stage=stageName===highestStageMode?highestPlayableStage(stageCards,rejectedStages,Boolean(go)):stageCards.find(card=>baseExpeditionName(stageNameOf(card))===stageName&&!stageIsLocked(card));let next;if(!picking){pickerFirstCard=null;attemptedCard=null;attempts=0;nextMenuAt=0}if(picking){release();const picker = document.querySelector("#picker");
 if (!picker || picker.classList.contains("hidden") || picker.classList.contains("closing")) return;
@@ -9867,7 +9869,7 @@ return;
   departing = false;
   delete document.documentElement.dataset.roHelperFinishVictory;
   next = result;
-}else if(stage){if(!stage.classList.contains("sel")){next=stage}else if(go&&!departing){next=go;departing=true;departureDifficultyContext={stage:baseExpeditionName(stageNameOf(stage)),lap:Number(highestLap||expeditionLap.value),account:activeAccount};if(taiwanGame) hansHighDifficultyUntil=Date.now()+30000;rotationRun=stageMode.value==="rotation"?{stage:stageName}:undefined}}else if(stageCards.length&&stageName){release();status.textContent=stageName===highestStageMode?"目前沒有可出發的一般關卡":"指定關卡目前無法出發："+stageName;return}else if(!go&&!field){departing=false;if(captain)next=captain}if(!next){if(last?.id!=="stg-go")last=undefined;const view=document.body.innerText;const battle=!visiblePicker&&!picking&&!result&&!go&&!field&&!captain&&inBattle&&/\b\d{2}:\d{2}\b/.test(view)&&!/(暫停|繼續遊戲)/.test(view)&&!document.activeElement?.matches("input,textarea,select,[contenteditable=true]");release();if(battle){const packet=readLivePacket();const stationaryMagnetOnly=!autoMove;const manualMagnetDue=updateTimedMagnet(packet,true);const manualMagnetPlan=manualMagnetAction(packet,manualMagnetDue,magnetSchedule.cleanupCollected,document.documentElement.dataset.roHelperBossCleanup==="on");if(stationaryMagnetOnly&&manualMagnetPlan==="idle"){blocked.clear();previousPosition=null;previousDirection=null;escapeDirection=-1;escapeUntil=0;status.textContent=gearPickupToggle.value==="timed"?(manualMagnetDue?"原地待命：等待可撿取的磁鐵":"原地待命：等待磁鐵間隔"):"手動移動";return}const fresh=packet&&Date.now()-packet.at>=0&&Date.now()-packet.at<750&&packet.routes?.length===route.length;if(!fresh){if(!retriedCoordinates&&!coordinateRequest&&(!coordinateConnectedAt||Date.now()-coordinateConnectedAt>3000)){retriedCoordinates=true;void connectCoordinates(false,true)}blocked.clear();previousPosition=null;previousDirection=null;escapeDirection=-1;escapeUntil=0;release();status.textContent=document.documentElement.dataset.roHelperError||document.documentElement.dataset.roHelperPhase|| (coordinateConnectedAt&&Date.now()-coordinateConnectedAt>3000?"戰鬥中未收到即時座標，走位已暫停":coordinateStatus);return}retriedCoordinates=false;
+}else if(stage){if(!stage.classList.contains("sel")){next=stage}else if(go&&!departing){next=go;departing=true;departureDifficultyContext={stage:baseExpeditionName(stageNameOf(stage)),lap:Number(highestLap||expeditionLap.value),account:activeAccount};if(taiwanGame) hansHighDifficultyUntil=Date.now()+30000;rotationRun=stageMode.value==="rotation"?{stage:stageName}:undefined}}else if(stageCards.length&&stageName){release();status.textContent=stageName===highestStageMode?"目前沒有可出發的一般關卡":"指定關卡目前無法出發："+stageName;return}else if(!go&&!field){departing=false;if(captain)next=captain}if(!next){if(last?.id!=="stg-go")last=undefined;const view=document.body.innerText;const battle=!visiblePicker&&!picking&&!result&&!go&&!field&&!captain&&inBattle&&!document.querySelector("#pause:not(.hidden),#npc-dialog:not(.hidden),dialog[open]")&&!document.activeElement?.matches("input,textarea,select,[contenteditable=true]");release();if(battle){const packet=readLivePacket();const stationaryMagnetOnly=!autoMove;const manualMagnetDue=updateTimedMagnet(packet,true);const manualMagnetPlan=manualMagnetAction(packet,manualMagnetDue,magnetSchedule.cleanupCollected,document.documentElement.dataset.roHelperBossCleanup==="on");if(stationaryMagnetOnly&&manualMagnetPlan==="idle"){blocked.clear();previousPosition=null;previousDirection=null;escapeDirection=-1;escapeUntil=0;status.textContent=gearPickupToggle.value==="timed"?(manualMagnetDue?"原地待命：等待可撿取的磁鐵":"原地待命：等待磁鐵間隔"):"手動移動";return}const fresh=packet&&Date.now()-packet.at>=0&&Date.now()-packet.at<750&&packet.routes?.length===route.length;if(!fresh){if(!retriedCoordinates&&!coordinateRequest&&(!coordinateConnectedAt||Date.now()-coordinateConnectedAt>3000)){retriedCoordinates=true;void connectCoordinates(false,true)}blocked.clear();previousPosition=null;previousDirection=null;escapeDirection=-1;escapeUntil=0;release();status.textContent=document.documentElement.dataset.roHelperError||document.documentElement.dataset.roHelperPhase|| (coordinateConnectedAt&&Date.now()-coordinateConnectedAt>3000?"戰鬥中未收到即時座標，走位已暫停":coordinateStatus);return}retriedCoordinates=false;
 const collectionWaypoint = stationaryMagnetOnly && manualMagnetPlan==="cleanup" && magnetSchedule.cleanupCollected ? null : packet.magnetWaypoint;
 if(stationaryMagnetOnly && manualMagnetPlan==="cleanup"){
   const pending = document.documentElement.dataset.roHelperBossCleanup==="on" ? packet.bossFarm?.gear : packet.cleanup?.gear;
@@ -10032,7 +10034,7 @@ return a.score < b.score ? i : best});const chosen=scores[best];
 if (!evadingRed) {
   const dodge = projectileDodge(packet,zones,shotAge,best);
   if (dodge !== null && dodge !== best) { sidestep(dodge); return; }
-}if(escaping){if(escapeDirection!==best||Date.now()>=escapeUntil){escapeDirection=best;escapeUntil=Date.now()+650}}else{escapeDirection=-1;escapeUntil=0}status.textContent=evadingRed?"座標｜閃避紅圈":usingMagnet?"走位：優先撿磁鐵":forced.length?"座標｜強制撿裝備／卡片":escaping?"座標｜走位：脫離怪群":finalBossTarget?(worldBossActive()?(worldBossShield()?"世界王｜護盾期間退開躲招":"世界王｜攻擊並優先閃避"):"座標｜尾王優先"):cleanup?"清場收尾：撿取裝備與卡片":followLeader?"座標｜跟隨隊長":(fresh?"座標｜":"畫面｜")+(chosen.chest?"走位：靠近寶箱":chosen.loot?(pickup?.kind === "magnet" ? "走位：靠近磁鐵" : pickup?.kind === "ball" ? "走位：撿燈籠節扭蛋" : "走位：靠近掉落物"):timedMagnet?(timedMagnetDue?"走位：等待可撿取的磁鐵":"走位：等待磁鐵間隔"):"走位：巡找掉落物");held=route[best];previousDirection=held;if(still>=2)status.textContent="座標未變：換方向避開卡點";for(const key of held)send("keydown",key);clearTimeout(movePulse);movePulse=setTimeout(release,escaping?155:chosen.uncertain?80:145)}else{status.textContent="已暫停走位："+captureStatus+""}}else if(picking){status.textContent="偵測到升級，但找不到可選卡片"}return}previousPosition=null;previousDirection=null;escapeDirection=-1;escapeUntil=0;release();if(picking)status.textContent="選擇技能："+label(next).split(/\n/).slice(0,4).join(" ");if(next!==last||next===go||next===stage)click(next)},160);const stop=(preserveRefresh=false)=>{if(!preserveRefresh)clearRefreshCheckpoint();window.removeEventListener("pagehide",levelCardStop.reset);levelCardStop.reset();requestLobbyNpc("cancel");delete document.documentElement.dataset.roHelperBossCleanup;delete document.documentElement.dataset.roHelperSkipChest;delete document.documentElement.dataset.roHelperChestDiscovery;if(sharedVideo){sharedVideo.srcObject.getTracks().forEach(track=>track.stop());sharedVideo=null}clearInterval(timer);clearTimeout(movePulse);delete document.documentElement.dataset.roHelperWorldBoss;release();rotationProgress.textContent="";window.removeEventListener("blur",release);
+}if(escaping){if(escapeDirection!==best||Date.now()>=escapeUntil){escapeDirection=best;escapeUntil=Date.now()+650}}else{escapeDirection=-1;escapeUntil=0}status.textContent=evadingRed?"座標｜閃避紅圈":usingMagnet?"走位：優先撿磁鐵":forced.length?"座標｜強制撿裝備／卡片":escaping?"座標｜走位：脫離怪群":finalBossTarget?(worldBossActive()?(worldBossShield()?"世界王｜護盾期間退開躲招":"世界王｜攻擊並優先閃避"):"座標｜尾王優先"):cleanup?"清場收尾：撿取裝備與卡片":followLeader?"座標｜跟隨隊長":(fresh?"座標｜":"畫面｜")+(chosen.chest?"走位：靠近寶箱":chosen.loot?(pickup?.kind === "magnet" ? "走位：靠近磁鐵" : pickup?.kind === "ball" ? "走位：撿燈籠節扭蛋" : "走位：靠近掉落物"):timedMagnet?(timedMagnetDue?"走位：等待可撿取的磁鐵":"走位：等待磁鐵間隔"):"走位：巡找掉落物");held=route[best];previousDirection=held;if(still>=2)status.textContent="座標未變：換方向避開卡點";for(const key of held)send("keydown",key);clearTimeout(movePulse);movePulse=setTimeout(release,escaping?155:chosen.uncertain?80:145)}else{status.textContent="已暫停走位："+captureStatus+""}}else if(picking){status.textContent="偵測到升級，但找不到可選卡片"}return}previousPosition=null;previousDirection=null;escapeDirection=-1;escapeUntil=0;release();if(picking)status.textContent="選擇技能："+label(next).split(/\n/).slice(0,4).join(" ");if(next!==last||next===go||next===stage)click(next)}catch(error){release();status.textContent="助手流程錯誤："+(error?.message||String(error));}},160);const stop=(preserveRefresh=false)=>{if(!preserveRefresh)clearRefreshCheckpoint();window.removeEventListener("pagehide",levelCardStop.reset);levelCardStop.reset();requestLobbyNpc("cancel");delete document.documentElement.dataset.roHelperBossCleanup;delete document.documentElement.dataset.roHelperSkipChest;delete document.documentElement.dataset.roHelperChestDiscovery;if(sharedVideo){sharedVideo.srcObject.getTracks().forEach(track=>track.stop());sharedVideo=null}clearInterval(timer);clearTimeout(movePulse);delete document.documentElement.dataset.roHelperWorldBoss;release();rotationProgress.textContent="";window.removeEventListener("blur",release);
   delete document.documentElement.dataset.roHelperFinishVictory;
   delete window[key];
   updateAssistantButton(false);
