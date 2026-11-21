@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 77.1
+// @version 77.2
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -2938,14 +2938,11 @@ function syncGpuBufferResolution(renderer,root) {
 }
 
 function shouldUpdateGpuVisuals(game, root, now) {
-  const key=Symbol.for("ro-helper-last-visual-update");
-  if(root.dataset.roHelperGpuSaver!=="on" || game.story || game.state==="cutscene"){
-    delete game[key];return true;
-  }
-  // Only the visual renderWorld preparation is throttled. advance/tick and samples stay live.
-  const previous=game[key];
-  if(previous!==undefined && now>=previous && now-previous<200)return false;
-  game[key]=now;return true;
+  // renderWorld advances effect lifetimes with a native 100ms delta cap.
+  // Skipping it for 200ms slows expiry and retains game-owned effects.
+  // Always run native lifecycle work; installGpuRenderGate gates GPU submissions.
+  delete game[Symbol.for("ro-helper-last-visual-update")];
+  return true;
 }
 
 function installGpuRenderGate(renderer, root) {
@@ -3977,7 +3974,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V77.1 網頁控制特別版";
+  const versionName = "Gear V77.2 網頁控制特別版";
   let runtimeInvalidated = false;
   const button = document.createElement("button");
   button.type = "button";
