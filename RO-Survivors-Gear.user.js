@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 78.0
+// @version 79.0
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -2509,6 +2509,48 @@ var qrcode = function() {
     return qrcode;
 }));
 
+function shareReviewedEffectGeometry(effect,world,root) {
+  if(!effect || !world || root?.dataset.roHelperMemoryFarming!=="on" || root.dataset.roHelperMemorySaver==="off")return;
+  const marker=Symbol.for("ro-helper-shared-effect-geometry");
+  if(effect[marker] || typeof effect.dispose!=="function")return;
+  const key=Symbol.for("ro-helper-effect-geometry-pool");
+  const state=world[key] || (world[key]={entries:new Map(),classes:new WeakMap(),shared:0,released:0,reportAt:0});
+  const C=effect.constructor;
+  if(typeof C!=="function")return;
+  let kind=state.classes.get(C);
+  if(kind===undefined){
+    const reviewed={"ij":"class ij{constructor(e){x(this,\"mesh\");x(this,\"mat\");x(this,\"age\",0);x(this,\"duration\");this.duration=e.duration;const a=2*e.outer+24,o=new cs(a,a);o.rotateX(-Math.PI/2),this.mat=new Ze({vertexShader:fA,fragmentShader:aj,uniforms:{shape:{value:e.shape===\"cone\"?1:0},quad:{value:new Ae(a,a)},outer:{value:e.outer},inner:{value:e.inner??0},halfAngle:{value:e.half??Math.PI},progress:{value:0},time:{value:Math.random()*10}},transparent:!0,depthWrite:!1,side:ra,polygonOffset:!0,polygonOffsetFactor:-4,polygonOffsetUnits:-4}),this.mesh=new qe(o,this.mat),this.mesh.rotation.y=-(e.angle??0),this.mesh.renderOrder=2,this.mesh.frustumCulled=!1}update(e){return this.age+=e*1e3,this.mat.uniforms.progress.value=Math.min(1,this.age/this.duration),this.mat.uniforms.time.value+=e,this.age>=this.duration}dispose(){this.mesh.geometry.dispose(),this.mat.dispose()}}","lj":"class lj{constructor(e){x(this,\"mesh\");x(this,\"mat\");x(this,\"age\",0);x(this,\"opts\");this.opts=e;const a=new Dn(Math.max(.5,e.top),Math.max(.5,e.bottom),Math.max(1,e.height),36,1,!0);a.translate(0,Math.max(1,e.height)/2,0);const o=a.attributes.uv;for(let n=0;n<o.count;n++)o.setY(n,1-o.getY(n));const s=e.color??[1,1,1];this.mat=new Wn({map:on(e.texture.source,!0),color:new Aa(s[0],s[1],s[2]),transparent:!0,opacity:0,blending:Ra,depthWrite:!1,side:ra}),this.mesh=new qe(a,this.mat),this.mesh.renderOrder=3,this.mesh.frustumCulled=!1,this.mesh.visible=!1}update(e,a){const o=this.opts;this.age+=e*1e3;const s=this.age-(o.delay??0);if(s<0)return!1;const n=Math.min(1,s/o.duration);if(o.follow){const d=o.follow();this.mesh.position.copy(a(d.x,d.y))}this.mesh.visible=!0;const r=o.animation??0,i=Math.min(1,n*2.2);this.mesh.scale.set(r===2?i:r===4?.5+.5*i:1,r===1?i:1,r===2?i:r===4?.5+.5*i:1),o.rotate&&(this.mesh.rotation.y+=e*2.4);const l=o.alpha??1;return this.mat.opacity=o.fade?l*(n<.15?n/.15:1-(n-.15)/.85):l*(n>.85?(1-n)/.15:1),n>=1}dispose(){this.mesh.geometry.dispose(),this.mat.dispose()}}"};
+    const text=Function.prototype.toString.call(C).replace(/\s+/g,"");
+    kind=Object.keys(reviewed).find(name=>reviewed[name].replace(/\s+/g,"")===text)||"";
+    state.classes.set(C,kind);
+  }
+  if(!kind)return;
+  const geometry=effect.mesh?.geometry;
+  if(!geometry || typeof geometry.dispose!=="function" || !effect.mat || typeof effect.mat.dispose!=="function")return;
+  const parameters=geometry.parameters;
+  if(!parameters || !Object.values(parameters).every(value=>typeof value==="boolean" || typeof value==="number" && Number.isFinite(value)))return;
+  const id=kind+":"+JSON.stringify(Object.keys(parameters).sort().map(name=>[name,parameters[name]]));
+  let entry=state.entries.get(id);
+  if(entry && entry.geometry!==geometry){
+    // Audited constructors allocate a new private geometry and never change its vertices.
+    // It has not been rendered yet; keep the shared geometry, release only this duplicate.
+    geometry.dispose();effect.mesh.geometry=entry.geometry;state.shared++;
+  }else if(!entry){
+    if(state.entries.size>=128)return;
+    entry={geometry,refs:0};state.entries.set(id,entry);
+  }
+  entry.refs++;effect[marker]=true;
+  let released=false;
+  // Audited native dispose methods release exactly mesh.geometry and mat.
+  // Materials stay per-effect; the shared geometry is released at its final owner.
+  effect.dispose=function(){
+    if(released)return;released=true;
+    try{if(--entry.refs===0){state.entries.delete(id);entry.geometry.dispose();state.released++;}}
+    finally{this.mat.dispose();}
+  };
+  const now=Date.now();if(now-state.reportAt>=1000){state.reportAt=now;root.dataset.roHelperGeometryPool=JSON.stringify({shared:state.shared,groups:state.entries.size,released:state.released});}
+}
+
 function installFarmingVisualBudget(game,root) {
   if(location.hostname!=="ro.hans-webgametw.com" || !root?.dataset)return;
   const key=Symbol.for("ro-helper-farming-visual-budget");
@@ -2534,11 +2576,14 @@ function installFarmingVisualBudget(game,root) {
     for(const [name,cost]of [["addCylinder",1],["addWave",2],["addFireWave",1],["addFirePatch",1],["addFireball",1]]){
       if(typeof world[name]!=="function" || Function.prototype.toString.call(world[name]).replace(/\s+/g,"")!==reviewed[name].replace(/\s+/g,""))continue;
       state.wrap(world,name,original=>function(...args){
-        if(!eligible() || state.depth===0 || !Array.isArray(this.cylinders))return original.apply(this,args);
-        if(state.managed.size+cost>24){state.decorations++;return;}
+        if(!eligible() || !Array.isArray(this.cylinders))return original.apply(this,args);
+        const playerDecoration=state.depth>0;
+        if(playerDecoration && state.managed.size+cost>24){state.decorations++;return;}
         const start=this.cylinders.length,result=original.apply(this,args);
         for(let i=start;i<this.cylinders.length;i++){
           const effect=this.cylinders[i];
+          try{shareReviewedEffectGeometry(effect,this,root);}catch{}
+          if(!playerDecoration)continue;
           if(!effect || typeof effect.dispose!=="function" || state.managed.has(effect))continue;
           const dispose=effect.dispose;state.managed.add(effect);
           effect.dispose=function(...values){try{return dispose.apply(this,values);}finally{state.managed.delete(effect);}};
@@ -2949,6 +2994,8 @@ function publishMemoryStatus(game,root) {
   if(now-state.at<10000 && now>=state.at)return;
   state.at=now;
   const world=game.world3d,info=world?.renderer?.info?.memory;
+  const pool=world?.[Symbol.for("ro-helper-effect-geometry-pool")];
+  if(pool)root.dataset.roHelperGeometryPool=JSON.stringify({shared:pool.shared,groups:pool.entries.size,released:pool.released});
   const sample={at:now,stage:game.stageId||"",heap:typeof performance!=="undefined"?performance.memory?.usedJSHeapSize:null,
     enemies:game.enemies?.length||0,effects:game.fx?.length||0,projectiles:game.projectiles?.length||0,
     ground:world?.groundSprites?.length||0,cylinders:world?.cylinders?.length||0,
@@ -3242,6 +3289,48 @@ function maintainNativeMemory(game,root,now=Date.now()) {
     }};
   })();
 
+function shareReviewedEffectGeometry(effect,world,root) {
+  if(!effect || !world || root?.dataset.roHelperMemoryFarming!=="on" || root.dataset.roHelperMemorySaver==="off")return;
+  const marker=Symbol.for("ro-helper-shared-effect-geometry");
+  if(effect[marker] || typeof effect.dispose!=="function")return;
+  const key=Symbol.for("ro-helper-effect-geometry-pool");
+  const state=world[key] || (world[key]={entries:new Map(),classes:new WeakMap(),shared:0,released:0,reportAt:0});
+  const C=effect.constructor;
+  if(typeof C!=="function")return;
+  let kind=state.classes.get(C);
+  if(kind===undefined){
+    const reviewed={"ij":"class ij{constructor(e){x(this,\"mesh\");x(this,\"mat\");x(this,\"age\",0);x(this,\"duration\");this.duration=e.duration;const a=2*e.outer+24,o=new cs(a,a);o.rotateX(-Math.PI/2),this.mat=new Ze({vertexShader:fA,fragmentShader:aj,uniforms:{shape:{value:e.shape===\"cone\"?1:0},quad:{value:new Ae(a,a)},outer:{value:e.outer},inner:{value:e.inner??0},halfAngle:{value:e.half??Math.PI},progress:{value:0},time:{value:Math.random()*10}},transparent:!0,depthWrite:!1,side:ra,polygonOffset:!0,polygonOffsetFactor:-4,polygonOffsetUnits:-4}),this.mesh=new qe(o,this.mat),this.mesh.rotation.y=-(e.angle??0),this.mesh.renderOrder=2,this.mesh.frustumCulled=!1}update(e){return this.age+=e*1e3,this.mat.uniforms.progress.value=Math.min(1,this.age/this.duration),this.mat.uniforms.time.value+=e,this.age>=this.duration}dispose(){this.mesh.geometry.dispose(),this.mat.dispose()}}","lj":"class lj{constructor(e){x(this,\"mesh\");x(this,\"mat\");x(this,\"age\",0);x(this,\"opts\");this.opts=e;const a=new Dn(Math.max(.5,e.top),Math.max(.5,e.bottom),Math.max(1,e.height),36,1,!0);a.translate(0,Math.max(1,e.height)/2,0);const o=a.attributes.uv;for(let n=0;n<o.count;n++)o.setY(n,1-o.getY(n));const s=e.color??[1,1,1];this.mat=new Wn({map:on(e.texture.source,!0),color:new Aa(s[0],s[1],s[2]),transparent:!0,opacity:0,blending:Ra,depthWrite:!1,side:ra}),this.mesh=new qe(a,this.mat),this.mesh.renderOrder=3,this.mesh.frustumCulled=!1,this.mesh.visible=!1}update(e,a){const o=this.opts;this.age+=e*1e3;const s=this.age-(o.delay??0);if(s<0)return!1;const n=Math.min(1,s/o.duration);if(o.follow){const d=o.follow();this.mesh.position.copy(a(d.x,d.y))}this.mesh.visible=!0;const r=o.animation??0,i=Math.min(1,n*2.2);this.mesh.scale.set(r===2?i:r===4?.5+.5*i:1,r===1?i:1,r===2?i:r===4?.5+.5*i:1),o.rotate&&(this.mesh.rotation.y+=e*2.4);const l=o.alpha??1;return this.mat.opacity=o.fade?l*(n<.15?n/.15:1-(n-.15)/.85):l*(n>.85?(1-n)/.15:1),n>=1}dispose(){this.mesh.geometry.dispose(),this.mat.dispose()}}"};
+    const text=Function.prototype.toString.call(C).replace(/\s+/g,"");
+    kind=Object.keys(reviewed).find(name=>reviewed[name].replace(/\s+/g,"")===text)||"";
+    state.classes.set(C,kind);
+  }
+  if(!kind)return;
+  const geometry=effect.mesh?.geometry;
+  if(!geometry || typeof geometry.dispose!=="function" || !effect.mat || typeof effect.mat.dispose!=="function")return;
+  const parameters=geometry.parameters;
+  if(!parameters || !Object.values(parameters).every(value=>typeof value==="boolean" || typeof value==="number" && Number.isFinite(value)))return;
+  const id=kind+":"+JSON.stringify(Object.keys(parameters).sort().map(name=>[name,parameters[name]]));
+  let entry=state.entries.get(id);
+  if(entry && entry.geometry!==geometry){
+    // Audited constructors allocate a new private geometry and never change its vertices.
+    // It has not been rendered yet; keep the shared geometry, release only this duplicate.
+    geometry.dispose();effect.mesh.geometry=entry.geometry;state.shared++;
+  }else if(!entry){
+    if(state.entries.size>=128)return;
+    entry={geometry,refs:0};state.entries.set(id,entry);
+  }
+  entry.refs++;effect[marker]=true;
+  let released=false;
+  // Audited native dispose methods release exactly mesh.geometry and mat.
+  // Materials stay per-effect; the shared geometry is released at its final owner.
+  effect.dispose=function(){
+    if(released)return;released=true;
+    try{if(--entry.refs===0){state.entries.delete(id);entry.geometry.dispose();state.released++;}}
+    finally{this.mat.dispose();}
+  };
+  const now=Date.now();if(now-state.reportAt>=1000){state.reportAt=now;root.dataset.roHelperGeometryPool=JSON.stringify({shared:state.shared,groups:state.entries.size,released:state.released});}
+}
+
 function installFarmingVisualBudget(game,root) {
   if(location.hostname!=="ro.hans-webgametw.com" || !root?.dataset)return;
   const key=Symbol.for("ro-helper-farming-visual-budget");
@@ -3267,11 +3356,14 @@ function installFarmingVisualBudget(game,root) {
     for(const [name,cost]of [["addCylinder",1],["addWave",2],["addFireWave",1],["addFirePatch",1],["addFireball",1]]){
       if(typeof world[name]!=="function" || Function.prototype.toString.call(world[name]).replace(/\s+/g,"")!==reviewed[name].replace(/\s+/g,""))continue;
       state.wrap(world,name,original=>function(...args){
-        if(!eligible() || state.depth===0 || !Array.isArray(this.cylinders))return original.apply(this,args);
-        if(state.managed.size+cost>24){state.decorations++;return;}
+        if(!eligible() || !Array.isArray(this.cylinders))return original.apply(this,args);
+        const playerDecoration=state.depth>0;
+        if(playerDecoration && state.managed.size+cost>24){state.decorations++;return;}
         const start=this.cylinders.length,result=original.apply(this,args);
         for(let i=start;i<this.cylinders.length;i++){
           const effect=this.cylinders[i];
+          try{shareReviewedEffectGeometry(effect,this,root);}catch{}
+          if(!playerDecoration)continue;
           if(!effect || typeof effect.dispose!=="function" || state.managed.has(effect))continue;
           const dispose=effect.dispose;state.managed.add(effect);
           effect.dispose=function(...values){try{return dispose.apply(this,values);}finally{state.managed.delete(effect);}};
@@ -4076,7 +4168,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V78.0 網頁控制特別版";
+  const versionName = "Gear V79.0 網頁控制特別版";
   let runtimeInvalidated = false;
   const button = document.createElement("button");
   button.type = "button";
@@ -10255,6 +10347,8 @@ void connectCoordinates(false);
     body.textContent += "\n遊戲閒置回收："+(localStorage.getItem("ro-helper-memory-saver")==="off"?"關":native?"已執行 "+native.passes+" 次；閒置批次釋放 "+native.batches+" 個；渲染清單重建 "+native.listResets+" 次；原生回收 "+native.gcRuns+" 次（非釋放資源數）":"等待戰鬥畫面維護");
     let budget;try{budget=JSON.parse(document.documentElement.dataset.roHelperVisualBudget||"null")}catch{}
     body.textContent += "\n掛機減少生成："+(budget?(budget.enabled?"生效":"未啟用")+"；已略過數字 "+budget.numbers+" 次、玩家裝飾 "+budget.decorations+" 次；受控裝飾 "+budget.active+"／"+budget.limit:"等待戰鬥資料");
+    let pooled;try{pooled=JSON.parse(document.documentElement.dataset.roHelperGeometryPool||"null")}catch{}
+    body.textContent += "\n相同幾何共用："+(pooled?"已合併 "+pooled.shared+" 份重複幾何；使用中 "+pooled.groups+" 組；整組到期釋放 "+pooled.released+" 次":"尚無可共用的已核對特效");
     dialog.append(body,close);dialog.onclose=()=>dialog.remove();document.body.append(dialog);dialog.showModal();
   };
   function clearRebuildableMemoryCaches() {
