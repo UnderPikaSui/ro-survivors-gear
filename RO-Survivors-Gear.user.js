@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 77.2
+// @version 78.0
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -2509,6 +2509,56 @@ var qrcode = function() {
     return qrcode;
 }));
 
+function installFarmingVisualBudget(game,root) {
+  if(location.hostname!=="ro.hans-webgametw.com" || !root?.dataset)return;
+  const key=Symbol.for("ro-helper-farming-visual-budget");
+  let state=game[key];
+  const eligible=()=>root.dataset.roHelperMemoryFarming==="on" && root.dataset.roHelperMemorySaver!=="off" && !game.story && game.state!=="cutscene";
+  if(!state){
+    state=game[key]={depth:0,managed:new Set(),weapons:new WeakSet(),worlds:new WeakSet(),numbers:0,decorations:0,lastReport:0};
+    const wrap=(target,name,factory)=>{try{const original=target?.[name];if(typeof original==="function")target[name]=factory(original);}catch{}};
+    // Match the native settings' early return, before any number view is allocated.
+    wrap(game,"addNumber",original=>function(...args){if(eligible()){state.numbers++;return;}return original.apply(this,args);});
+    // Native low quality uses fxRoom(true)=false, a 25 optional-FX limit and no crit FX.
+    wrap(game,"fxRoom",original=>function(...args){if(eligible() && (args[0]===true || (this.fx?.length||0)>=25))return false;return original.apply(this,args);});
+    wrap(game,"critFx",original=>function(...args){if(!eligible())return original.apply(this,args);});
+    state.wrap=wrap;
+  }
+  const world=game.world3d;
+  if(world && !state.worlds.has(world)){
+    if(state.world && state.world!==world)state.managed.clear();
+    state.world=world;state.worlds.add(world);
+    // Only these audited factories are void, visual-only methods. Never wrap
+    // add3D/addZone/projectiles: their effect objects can carry hazard state.
+    const reviewed={"addCylinder":"addCylinder(e,a,o){const s=new lj(o);s.mesh.position.set(e,this.heightAt(e,a)+2,a),this.scene.add(s.mesh),this.cylinders.push(s)}","addWave":"addWave(e,a,o){const s=this.heightAt(e,a),n=new ij(o);if(n.mesh.position.set(e,s+2,a),this.scene.add(n.mesh),this.cylinders.push(n),(o.height??70)<=0)return;const r=new rj(o);r.mesh.position.set(e,s+1,a),this.scene.add(r.mesh),this.cylinders.push(r)}","addFireWave":"addFireWave(e,a,o){this.add3D(e,a,new P4(o))}","addFirePatch":"addFirePatch(e,a,o){this.add3D(e,a,new Sv(o))}","addFireball":"addFireball(e,a,o){this.add3D(e,a,new k4(o))}"};
+    for(const [name,cost]of [["addCylinder",1],["addWave",2],["addFireWave",1],["addFirePatch",1],["addFireball",1]]){
+      if(typeof world[name]!=="function" || Function.prototype.toString.call(world[name]).replace(/\s+/g,"")!==reviewed[name].replace(/\s+/g,""))continue;
+      state.wrap(world,name,original=>function(...args){
+        if(!eligible() || state.depth===0 || !Array.isArray(this.cylinders))return original.apply(this,args);
+        if(state.managed.size+cost>24){state.decorations++;return;}
+        const start=this.cylinders.length,result=original.apply(this,args);
+        for(let i=start;i<this.cylinders.length;i++){
+          const effect=this.cylinders[i];
+          if(!effect || typeof effect.dispose!=="function" || state.managed.has(effect))continue;
+          const dispose=effect.dispose;state.managed.add(effect);
+          effect.dispose=function(...values){try{return dispose.apply(this,values);}finally{state.managed.delete(effect);}};
+        }
+        return result;
+      });
+    }
+  }
+  for(const weapon of game.weapons||[]){
+    if(!weapon || state.weapons.has(weapon))continue;
+    state.weapons.add(weapon);
+    state.wrap(weapon,"fire",original=>function(...args){
+      if(args[0]!==game || !eligible())return original.apply(this,args);
+      state.depth++;try{return original.apply(this,args);}finally{state.depth--;}
+    });
+  }
+  const now=Date.now();
+  if(now-state.lastReport>=1000){state.lastReport=now;root.dataset.roHelperVisualBudget=JSON.stringify({at:now,enabled:eligible(),numbers:state.numbers,decorations:state.decorations,active:state.managed.size,limit:24});}
+}
+
 (() => {
   if (window.top !== window || window.__roGearCapture) return;
   window.__roGearCapture = true;
@@ -3038,6 +3088,7 @@ function maintainNativeMemory(game,root,now=Date.now()) {
       installGpuRenderGate(this.app?.renderer,document.documentElement);
       syncGpuBufferResolution(this.world3d?.renderer,document.documentElement);
       syncGpuBufferResolution(this.app?.renderer,document.documentElement);
+      installFarmingVisualBudget(this,document.documentElement);
       publishMemoryStatus(this,document.documentElement);
       if(!shouldUpdateGpuVisuals(this,document.documentElement,performance.now()))return;
       installGpuRenderGate(this.world3d?.renderer,document.documentElement);
@@ -3050,6 +3101,7 @@ function maintainNativeMemory(game,root,now=Date.now()) {
   function capturePlayer(target, key) {
     if (key === "player" && typeof target.renderWorld === "function") {
       active = target;
+      installFarmingVisualBudget(target,document.documentElement);
       wrapGearRendering(target);
       setPhase("已讀到戰鬥物件");
     }
@@ -3189,6 +3241,56 @@ function maintainNativeMemory(game,root,now=Date.now()) {
       });
     }};
   })();
+
+function installFarmingVisualBudget(game,root) {
+  if(location.hostname!=="ro.hans-webgametw.com" || !root?.dataset)return;
+  const key=Symbol.for("ro-helper-farming-visual-budget");
+  let state=game[key];
+  const eligible=()=>root.dataset.roHelperMemoryFarming==="on" && root.dataset.roHelperMemorySaver!=="off" && !game.story && game.state!=="cutscene";
+  if(!state){
+    state=game[key]={depth:0,managed:new Set(),weapons:new WeakSet(),worlds:new WeakSet(),numbers:0,decorations:0,lastReport:0};
+    const wrap=(target,name,factory)=>{try{const original=target?.[name];if(typeof original==="function")target[name]=factory(original);}catch{}};
+    // Match the native settings' early return, before any number view is allocated.
+    wrap(game,"addNumber",original=>function(...args){if(eligible()){state.numbers++;return;}return original.apply(this,args);});
+    // Native low quality uses fxRoom(true)=false, a 25 optional-FX limit and no crit FX.
+    wrap(game,"fxRoom",original=>function(...args){if(eligible() && (args[0]===true || (this.fx?.length||0)>=25))return false;return original.apply(this,args);});
+    wrap(game,"critFx",original=>function(...args){if(!eligible())return original.apply(this,args);});
+    state.wrap=wrap;
+  }
+  const world=game.world3d;
+  if(world && !state.worlds.has(world)){
+    if(state.world && state.world!==world)state.managed.clear();
+    state.world=world;state.worlds.add(world);
+    // Only these audited factories are void, visual-only methods. Never wrap
+    // add3D/addZone/projectiles: their effect objects can carry hazard state.
+    const reviewed={"addCylinder":"addCylinder(e,a,o){const s=new lj(o);s.mesh.position.set(e,this.heightAt(e,a)+2,a),this.scene.add(s.mesh),this.cylinders.push(s)}","addWave":"addWave(e,a,o){const s=this.heightAt(e,a),n=new ij(o);if(n.mesh.position.set(e,s+2,a),this.scene.add(n.mesh),this.cylinders.push(n),(o.height??70)<=0)return;const r=new rj(o);r.mesh.position.set(e,s+1,a),this.scene.add(r.mesh),this.cylinders.push(r)}","addFireWave":"addFireWave(e,a,o){this.add3D(e,a,new P4(o))}","addFirePatch":"addFirePatch(e,a,o){this.add3D(e,a,new Sv(o))}","addFireball":"addFireball(e,a,o){this.add3D(e,a,new k4(o))}"};
+    for(const [name,cost]of [["addCylinder",1],["addWave",2],["addFireWave",1],["addFirePatch",1],["addFireball",1]]){
+      if(typeof world[name]!=="function" || Function.prototype.toString.call(world[name]).replace(/\s+/g,"")!==reviewed[name].replace(/\s+/g,""))continue;
+      state.wrap(world,name,original=>function(...args){
+        if(!eligible() || state.depth===0 || !Array.isArray(this.cylinders))return original.apply(this,args);
+        if(state.managed.size+cost>24){state.decorations++;return;}
+        const start=this.cylinders.length,result=original.apply(this,args);
+        for(let i=start;i<this.cylinders.length;i++){
+          const effect=this.cylinders[i];
+          if(!effect || typeof effect.dispose!=="function" || state.managed.has(effect))continue;
+          const dispose=effect.dispose;state.managed.add(effect);
+          effect.dispose=function(...values){try{return dispose.apply(this,values);}finally{state.managed.delete(effect);}};
+        }
+        return result;
+      });
+    }
+  }
+  for(const weapon of game.weapons||[]){
+    if(!weapon || state.weapons.has(weapon))continue;
+    state.weapons.add(weapon);
+    state.wrap(weapon,"fire",original=>function(...args){
+      if(args[0]!==game || !eligible())return original.apply(this,args);
+      state.depth++;try{return original.apply(this,args);}finally{state.depth--;}
+    });
+  }
+  const now=Date.now();
+  if(now-state.lastReport>=1000){state.lastReport=now;root.dataset.roHelperVisualBudget=JSON.stringify({at:now,enabled:eligible(),numbers:state.numbers,decorations:state.decorations,active:state.managed.size,limit:24});}
+}
 
 function maintainNativeMemory(game,root,now=Date.now()) {
   const key=Symbol.for("ro-helper-native-memory-maintenance");
@@ -3974,13 +4076,14 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V77.2 網頁控制特別版";
+  const versionName = "Gear V78.0 網頁控制特別版";
   let runtimeInvalidated = false;
   const button = document.createElement("button");
   button.type = "button";
   const compactToggle = document.createElement("button");
   compactToggle.type = "button";
   const updateAssistantButton = running => {
+    document.documentElement.dataset.roHelperMemoryFarming=running?"on":"off";
     compactToggle.textContent = running ? "停止" : "啟動";
     compactToggle.setAttribute("aria-label",running ? "停止助手" : "啟動助手");
     button.textContent = "RO 練等助手 " + versionName + " · " + (running ? "啟動中" : "已關閉");
@@ -10150,6 +10253,8 @@ void connectCoordinates(false);
     }
     let native;try{native=JSON.parse(document.documentElement.dataset.roHelperNativeMemory||"null")}catch{}
     body.textContent += "\n遊戲閒置回收："+(localStorage.getItem("ro-helper-memory-saver")==="off"?"關":native?"已執行 "+native.passes+" 次；閒置批次釋放 "+native.batches+" 個；渲染清單重建 "+native.listResets+" 次；原生回收 "+native.gcRuns+" 次（非釋放資源數）":"等待戰鬥畫面維護");
+    let budget;try{budget=JSON.parse(document.documentElement.dataset.roHelperVisualBudget||"null")}catch{}
+    body.textContent += "\n掛機減少生成："+(budget?(budget.enabled?"生效":"未啟用")+"；已略過數字 "+budget.numbers+" 次、玩家裝飾 "+budget.decorations+" 次；受控裝飾 "+budget.active+"／"+budget.limit:"等待戰鬥資料");
     dialog.append(body,close);dialog.onclose=()=>dialog.remove();document.body.append(dialog);dialog.showModal();
   };
   function clearRebuildableMemoryCaches() {
@@ -10183,7 +10288,7 @@ void connectCoordinates(false);
   const refreshMemorySaver=()=>{
     const enabled=localStorage.getItem("ro-helper-memory-saver")!=="off";
     memorySaver.textContent="省記憶體："+(enabled?"開":"關");
-    memorySaver.title="掛機時每15秒嘗試原生閒置回收與渲染清單重建；圖示延後載入需重新整理生效";
+    memorySaver.title="掛機時略過傷害數字、沿用最少模式的可選特效限制，玩家技能純裝飾3D上限24；保留原生更新、回收及戰鬥判定。圖示延後載入需重新整理生效";
     memorySaver.setAttribute("aria-pressed",String(enabled));
   };
   memorySaver.onclick=()=>{const enabled=localStorage.getItem("ro-helper-memory-saver")!=="off";localStorage.setItem("ro-helper-memory-saver",enabled?"off":"on");refreshMemorySaver();status.textContent="省記憶體已切換：戰鬥閒置回收立即生效；圖示延後載入需重新整理";};
