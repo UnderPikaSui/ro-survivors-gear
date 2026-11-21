@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 77.0
+// @version 77.1
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -2909,14 +2909,31 @@ function publishMemoryStatus(game,root) {
 }
 
 function syncGpuBufferResolution(renderer,root) {
-  if(typeof renderer?.getPixelRatio!=="function" || typeof renderer?.setPixelRatio!=="function")return;
-  const key=Symbol.for("ro-helper-original-pixel-ratio"),enabled=root.dataset.roHelperGpuSaver==="on";
+  if(!renderer)return;
+  const enabled=root.dataset.roHelperGpuSaver==="on";
   try {
+    if(typeof renderer.getPixelRatio==="function" && typeof renderer.setPixelRatio==="function"){
+      const key=Symbol.for("ro-helper-original-pixel-ratio");
+      if(enabled){
+        if(renderer[key]===undefined){const ratio=renderer.getPixelRatio();if(!Number.isFinite(ratio)||ratio<=0)return;renderer[key]=ratio;}
+        const target=Math.min(renderer[key],.25);
+        if(renderer.getPixelRatio()!==target)renderer.setPixelRatio(target);
+      }else if(renderer[key]!==undefined){const ratio=renderer[key];renderer.setPixelRatio(ratio);delete renderer[key];}
+      return;
+    }
+    // Pixi resize takes logical screen dimensions and a separate pixel resolution.
+    // Never pass physical canvas dimensions: game layout and pointer coordinates stay intact.
+    if(typeof renderer.resize!=="function" || !renderer.screen)return;
+    const key=Symbol.for("ro-helper-original-pixi-resolution"),ratio=renderer.resolution;
+    const {width,height}=renderer.screen;
+    if(![ratio,width,height].every(Number.isFinite)||ratio<=0||width<=0||height<=0)return;
     if(enabled){
-      if(renderer[key]===undefined){const ratio=renderer.getPixelRatio();if(!Number.isFinite(ratio)||ratio<=0)return;renderer[key]=ratio;}
-      const target=Math.min(renderer[key],.25);
-      if(renderer.getPixelRatio()!==target)renderer.setPixelRatio(target);
-    }else if(renderer[key]!==undefined){const ratio=renderer[key];delete renderer[key];renderer.setPixelRatio(ratio);}
+      const original=renderer[key]??ratio,target=Math.min(original,.25);
+      if(ratio!==target)renderer.resize(width,height,target);
+      if(renderer[key]===undefined)renderer[key]=original;
+    }else if(renderer[key]!==undefined){
+      renderer.resize(width,height,renderer[key]);delete renderer[key];
+    }
   }catch{}
 }
 
@@ -3023,6 +3040,7 @@ function maintainNativeMemory(game,root,now=Date.now()) {
     game.renderWorld = function(...args) {
       installGpuRenderGate(this.app?.renderer,document.documentElement);
       syncGpuBufferResolution(this.world3d?.renderer,document.documentElement);
+      syncGpuBufferResolution(this.app?.renderer,document.documentElement);
       publishMemoryStatus(this,document.documentElement);
       if(!shouldUpdateGpuVisuals(this,document.documentElement,performance.now()))return;
       installGpuRenderGate(this.world3d?.renderer,document.documentElement);
@@ -3959,7 +3977,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V77.0 網頁控制特別版";
+  const versionName = "Gear V77.1 網頁控制特別版";
   let runtimeInvalidated = false;
   const button = document.createElement("button");
   button.type = "button";
