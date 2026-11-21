@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 76.0
+// @version 77.0
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -2990,6 +2990,32 @@ function installGpuRenderGate(renderer, root) {
   return true;
 }
 
+function maintainNativeMemory(game,root,now=Date.now()) {
+  const key=Symbol.for("ro-helper-native-memory-maintenance");
+  let state=game[key];
+  if(localStorage.getItem("ro-helper-memory-saver")==="off")return;
+  if(!state)state=game[key]={at:now,passes:0,batches:0,listResets:0,gcRuns:0};
+  if(now>=state.at && now-state.at<15000)return;
+  state.at=now;
+  const world=game.world3d;
+  // Run only after renderWorld has returned: no frame is using its render lists.
+  // The game's own pruning function checks lastUsed and owns disposal/re-upload.
+  if(world && !world.gone && typeof world.pruneBatches==="function"){
+    const before=(world.batches?.size||0)+(world.ghostBatches?.size||0);
+    try{world.pruneBatches();const after=(world.batches?.size||0)+(world.ghostBatches?.size||0);state.batches+=Math.max(0,before-after);}catch{}
+  }
+  const lists=world?.renderer?.renderLists;
+  if(world && !world.gone && typeof lists?.dispose==="function"){
+    try{lists.dispose();state.listResets++;}catch{}
+  }
+  const gc=game.app?.renderer?.gc;
+  if(gc && Number.isFinite(gc.maxUnusedTime) && typeof gc.run==="function"){
+    try{gc.run();state.gcRuns++;}catch{}
+  }
+  state.passes++;
+  root.dataset.roHelperNativeMemory=JSON.stringify({at:now,passes:state.passes,batches:state.batches,listResets:state.listResets,gcRuns:state.gcRuns});
+}
+
   const gpuWrappedGames = new WeakSet();
   function wrapGearRendering(game) {
     if (gpuWrappedGames.has(game)) return;
@@ -3000,7 +3026,9 @@ function installGpuRenderGate(renderer, root) {
       publishMemoryStatus(this,document.documentElement);
       if(!shouldUpdateGpuVisuals(this,document.documentElement,performance.now()))return;
       installGpuRenderGate(this.world3d?.renderer,document.documentElement);
-      return render.apply(this,args);
+      const result=render.apply(this,args);
+      try{maintainNativeMemory(this,document.documentElement);}catch{}
+      return result;
     };
     gpuWrappedGames.add(game);
   }
@@ -3146,6 +3174,32 @@ function installGpuRenderGate(renderer, root) {
       });
     }};
   })();
+
+function maintainNativeMemory(game,root,now=Date.now()) {
+  const key=Symbol.for("ro-helper-native-memory-maintenance");
+  let state=game[key];
+  if(localStorage.getItem("ro-helper-memory-saver")==="off")return;
+  if(!state)state=game[key]={at:now,passes:0,batches:0,listResets:0,gcRuns:0};
+  if(now>=state.at && now-state.at<15000)return;
+  state.at=now;
+  const world=game.world3d;
+  // Run only after renderWorld has returned: no frame is using its render lists.
+  // The game's own pruning function checks lastUsed and owns disposal/re-upload.
+  if(world && !world.gone && typeof world.pruneBatches==="function"){
+    const before=(world.batches?.size||0)+(world.ghostBatches?.size||0);
+    try{world.pruneBatches();const after=(world.batches?.size||0)+(world.ghostBatches?.size||0);state.batches+=Math.max(0,before-after);}catch{}
+  }
+  const lists=world?.renderer?.renderLists;
+  if(world && !world.gone && typeof lists?.dispose==="function"){
+    try{lists.dispose();state.listResets++;}catch{}
+  }
+  const gc=game.app?.renderer?.gc;
+  if(gc && Number.isFinite(gc.maxUnusedTime) && typeof gc.run==="function"){
+    try{gc.run();state.gcRuns++;}catch{}
+  }
+  state.passes++;
+  root.dataset.roHelperNativeMemory=JSON.stringify({at:now,passes:state.passes,batches:state.batches,listResets:state.listResets,gcRuns:state.gcRuns});
+}
 
 function buildDifficultyAdvice(api, character, options) {
   const canonicalStageName=value=>{
@@ -3905,7 +3959,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V76.0 網頁控制特別版";
+  const versionName = "Gear V77.0 網頁控制特別版";
   let runtimeInvalidated = false;
   const button = document.createElement("button");
   button.type = "button";
@@ -10079,6 +10133,8 @@ void connectCoordinates(false);
       const elapsed=Math.max(0,Math.round((current.at-previous.at)/1000));
       body.textContent="遊戲資源狀態（"+Math.max(0,Math.round((Date.now()-current.at)/1000))+"秒前）\nRO 分頁 JavaScript 堆積（遊戲與助手合計）："+mb(current.heap)+"\n觀察起點："+mb(previous.heap)+"（"+elapsed+"秒前）\n怪物："+current.enemies+"\n特效："+current.effects+"\n投射物："+current.projectiles+"\n地面特效："+current.ground+"\n立體特效："+current.cylinders+"\n圖示延後載入："+(current.lazyEnabled?"生效":"未啟用")+"（延後 "+(current.lazyDeferred??"—")+"／已載入 "+(current.lazyLoaded??"—")+"）\n3D貼圖："+(current.textures??"—")+"\n3D幾何資源："+(current.geometries??"—")+"\n\n這是 RO 分頁的 JavaScript 堆積與遊戲資源計數，不是助手單獨用量，也不是整個分頁的總記憶體；不包含完整 GPU／原生資源。";
     }
+    let native;try{native=JSON.parse(document.documentElement.dataset.roHelperNativeMemory||"null")}catch{}
+    body.textContent += "\n遊戲閒置回收："+(localStorage.getItem("ro-helper-memory-saver")==="off"?"關":native?"已執行 "+native.passes+" 次；閒置批次釋放 "+native.batches+" 個；渲染清單重建 "+native.listResets+" 次；原生回收 "+native.gcRuns+" 次（非釋放資源數）":"等待戰鬥畫面維護");
     dialog.append(body,close);dialog.onclose=()=>dialog.remove();document.body.append(dialog);dialog.showModal();
   };
   function clearRebuildableMemoryCaches() {
@@ -10112,10 +10168,10 @@ void connectCoordinates(false);
   const refreshMemorySaver=()=>{
     const enabled=localStorage.getItem("ro-helper-memory-saver")!=="off";
     memorySaver.textContent="省記憶體："+(enabled?"開":"關");
-    memorySaver.title="使用遊戲內建圖示延後載入；更改後請重新整理遊戲，下次載入生效";
+    memorySaver.title="掛機時每15秒嘗試原生閒置回收與渲染清單重建；圖示延後載入需重新整理生效";
     memorySaver.setAttribute("aria-pressed",String(enabled));
   };
-  memorySaver.onclick=()=>{const enabled=localStorage.getItem("ro-helper-memory-saver")!=="off";localStorage.setItem("ro-helper-memory-saver",enabled?"off":"on");refreshMemorySaver();status.textContent="省記憶體設定已更改，重新整理遊戲後生效";};
+  memorySaver.onclick=()=>{const enabled=localStorage.getItem("ro-helper-memory-saver")!=="off";localStorage.setItem("ro-helper-memory-saver",enabled?"off":"on");refreshMemorySaver();status.textContent="省記憶體已切換：戰鬥閒置回收立即生效；圖示延後載入需重新整理";};
   refreshMemorySaver();
   const gpuSaver = document.createElement("button");
   gpuSaver.type = "button";
