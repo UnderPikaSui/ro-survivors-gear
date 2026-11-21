@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 75.2
+// @version 76.0
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -3905,7 +3905,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V75.2 網頁控制特別版";
+  const versionName = "Gear V76.0 網頁控制特別版";
   let runtimeInvalidated = false;
   const button = document.createElement("button");
   button.type = "button";
@@ -10077,9 +10077,35 @@ void connectCoordinates(false);
     else{
       const mb=value=>Number.isFinite(value)?(value/1048576).toFixed(1)+" MB":"不支援";
       const elapsed=Math.max(0,Math.round((current.at-previous.at)/1000));
-      body.textContent="遊戲資源狀態（"+Math.max(0,Math.round((Date.now()-current.at)/1000))+"秒前）\n程式資料記憶體："+mb(current.heap)+"\n觀察起點："+mb(previous.heap)+"（"+elapsed+"秒前）\n怪物："+current.enemies+"\n特效："+current.effects+"\n投射物："+current.projectiles+"\n地面特效："+current.ground+"\n立體特效："+current.cylinders+"\n圖示延後載入："+(current.lazyEnabled?"生效":"未啟用")+"（延後 "+(current.lazyDeferred??"—")+"／已載入 "+(current.lazyLoaded??"—")+"）\n3D貼圖："+(current.textures??"—")+"\n3D幾何資源："+(current.geometries??"—")+"\n\n這是遊戲內部資料，與工作管理員的整個瀏覽器用量不同。";
+      body.textContent="遊戲資源狀態（"+Math.max(0,Math.round((Date.now()-current.at)/1000))+"秒前）\nRO 分頁 JavaScript 堆積（遊戲與助手合計）："+mb(current.heap)+"\n觀察起點："+mb(previous.heap)+"（"+elapsed+"秒前）\n怪物："+current.enemies+"\n特效："+current.effects+"\n投射物："+current.projectiles+"\n地面特效："+current.ground+"\n立體特效："+current.cylinders+"\n圖示延後載入："+(current.lazyEnabled?"生效":"未啟用")+"（延後 "+(current.lazyDeferred??"—")+"／已載入 "+(current.lazyLoaded??"—")+"）\n3D貼圖："+(current.textures??"—")+"\n3D幾何資源："+(current.geometries??"—")+"\n\n這是 RO 分頁的 JavaScript 堆積與遊戲資源計數，不是助手單獨用量，也不是整個分頁的總記憶體；不包含完整 GPU／原生資源。";
     }
     dialog.append(body,close);dialog.onclose=()=>dialog.remove();document.body.append(dialog);dialog.showModal();
+  };
+  function clearRebuildableMemoryCaches() {
+    const cleared=[];
+    // These are derived JSON views only. The authoritative datasets, loot history,
+    // identity, counters and game-owned resources remain untouched.
+    if(cachedLiveText!==undefined || cachedLivePacket!==undefined){
+      cachedLiveText=undefined;cachedLivePacket=undefined;
+      cleared.push({name:"助手即時座標解析快取",count:1});
+    }
+    if(cachedLootText!==undefined || cachedLootSnapshot!==undefined){
+      cachedLootText=undefined;cachedLootSnapshot=undefined;
+      cleared.push({name:"助手掉落快照解析快取",count:1});
+    }
+    return cleared;
+  }
+  const memoryCleanupButton=document.createElement("button");
+  memoryCleanupButton.type="button";memoryCleanupButton.textContent="立即清理記憶體";
+  const memoryCleanupReport=document.createElement("div");
+  memoryCleanupReport.setAttribute("role","status");memoryCleanupReport.setAttribute("aria-live","polite");
+  memoryCleanupReport.style.cssText="font-size:12px;white-space:pre-line;flex-basis:100%;margin:4px 0";
+  memoryCleanupButton.title="清除可安全重建的助手解析快取；保留本局掉落與統計，不暫停掛機";
+  memoryCleanupButton.onclick=()=>{
+    const cleared=clearRebuildableMemoryCaches();
+    memoryCleanupReport.textContent=cleared.length
+      ? "已清理 "+cleared.reduce((sum,row)=>sum+row.count,0)+" 項：\n"+cleared.map(row=>row.name+" ×"+row.count).join("\n")+"\n快取會依需要重建；不代表整個 RO 分頁的記憶體已立即下降。"
+      : "目前沒有可安全清理的資源";
   };
   const memorySaver=document.createElement("button");
   memorySaver.type="button";
@@ -10212,7 +10238,7 @@ void connectCoordinates(false);
   content.style.cssText = "padding:5px;max-width:260px;max-height:calc(100vh - 64px);overflow:auto";
   const actions = document.createElement("div");
   actions.style.cssText = "display:flex;flex-direction:column;gap:6px;width:100%;box-sizing:border-box";
-  for (const control of [button, gpuSaver, ...(taiwanGame?[memorySaver,memoryStatusButton]:[]), autoLoginToggle, loginCharacterSetting, settingsTransferButton, ...(taiwanGame ? [worldBossToggle,worldBossMode,worldBossLeadRow] : []), lootButton, mobileDrops, settings, treasureButton, share, ...(taiwanGame ? [inventoryButton,cardRecycleButton,upgradeButton,gsAdvisorButton,growthButton,targetStorageButton] : [difficultyButton]), movementToggle, gearPickupToggle, magnetIntervalSetting, collisionMode, chestMode, chestDiscoverySetting, ...(taiwanGame ? [cardStopMode,noFlipSetting,targetStop] : []), rollChoice, partyMode, rerollToggle, skillFocus.select, ...treasureFocus.map(choice => choice.select)]) {
+  for (const control of [button, gpuSaver, ...(taiwanGame?[memorySaver,memoryCleanupButton,memoryCleanupReport,memoryStatusButton]:[]), autoLoginToggle, loginCharacterSetting, settingsTransferButton, ...(taiwanGame ? [worldBossToggle,worldBossMode,worldBossLeadRow] : []), lootButton, mobileDrops, settings, treasureButton, share, ...(taiwanGame ? [inventoryButton,cardRecycleButton,upgradeButton,gsAdvisorButton,growthButton,targetStorageButton] : [difficultyButton]), movementToggle, gearPickupToggle, magnetIntervalSetting, collisionMode, chestMode, chestDiscoverySetting, ...(taiwanGame ? [cardStopMode,noFlipSetting,targetStop] : []), rollChoice, partyMode, rerollToggle, skillFocus.select, ...treasureFocus.map(choice => choice.select)]) {
     control.style.cssText = "background:#234b96;color:white;padding:5px 7px;border-radius:5px;cursor:pointer";
     actions.append(control);
   }
@@ -10251,7 +10277,7 @@ void connectCoordinates(false);
   addPanelGroup("技能／寶物選牌",[settings,treasureButton,skillFocus.select,...treasureFocus.map(choice=>choice.select),rerollToggle,...(taiwanGame?[cardStopMode,noFlipSetting,targetStop]:[])]);
   addPanelGroup("裝備／角色整理",taiwanGame?[inventoryButton,cardRecycleButton,upgradeButton,gsAdvisorButton,targetStorageButton,growthButton]:[]);
   addPanelGroup("拾取設定",[gearPickupToggle,magnetIntervalSetting,chestMode,chestDiscoverySetting]);
-  addPanelGroup("移動／系統",[movementToggle,collisionMode,share,gpuSaver,...(taiwanGame?[memorySaver,memoryStatusButton]:[]),autoLoginToggle,loginCharacterSetting]);
+  addPanelGroup("移動／系統",[movementToggle,collisionMode,share,gpuSaver,...(taiwanGame?[memorySaver,memoryCleanupButton,memoryCleanupReport,memoryStatusButton]:[]),autoLoginToggle,loginCharacterSetting]);
   addPanelGroup("組隊／世界王",[partyMode,rollChoice,...(taiwanGame?[worldBossToggle,worldBossMode,worldBossLeadRow]:[])]);
   addPanelGroup("掉落／設定備份",[lootButton,mobileDrops,settingsTransferButton]);
   if (!taiwanGame) stageSettings.append(difficultyButton);
