@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 80.1
+// @version 81.0
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -4168,7 +4168,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V80.1 網頁控制特別版";
+  const versionName = "Gear V81.0 網頁控制特別版";
   let runtimeInvalidated = false;
   const button = document.createElement("button");
   button.type = "button";
@@ -7465,6 +7465,15 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
     if (filter === "headgear") return type === "headgear" || Boolean(type?.startsWith("head_"));
     return filter === type;
   }
+  function inventoryTypeExcluded(exclude,type) {
+    if(!exclude?.length)return false;
+    if(!type)return true;
+    if(exclude.includes(type))return true;
+    if(exclude.includes("weapon") && Object.hasOwn(inventoryWeaponTypes,type))return true;
+    if(exclude.includes("headgear") && (type==="headgear" || type.startsWith("head_")))return true;
+    return type==="headgear" && exclude.some(key=>key.startsWith("head_"));
+  }
+  const inventoryNeedsType=rule=>Boolean(rule.weapon || rule.exclude?.length);
   function inventoryRules(settings) {
     const rules = Array.isArray(settings.rules) ? settings.rules : [{terms:settings.terms,page:0}];
     return rules.flatMap(rule => {
@@ -7473,10 +7482,11 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
       const tier = rule.tier ?? 0;
       const quality = rule.quality ?? 0;
       const weapon = rule.weapon ?? "";
+      const exclude=[...new Set((Array.isArray(rule.exclude)?rule.exclude:[]).filter(key=>key==="weapon" || Object.hasOwn(inventoryArmorTypes,key) || Object.hasOwn(inventoryWeaponTypes,key)))];
       if (weapon && !["magic","melee","ranged","boss"].includes(weapon) && !Object.hasOwn(inventoryWeaponTypes,weapon) && !Object.hasOwn(inventoryArmorTypes,weapon)) return [];
       if ((tier !== 0 && !validGearTier(tier)) ||
           !Number.isInteger(quality) || quality < 0 || quality >= inventoryQualities.length) return [];
-      return terms.length || tier || quality || weapon ? [{terms,page:rule.page,tier,quality,weapon}] : [];
+      return terms.length || tier || quality || weapon || exclude.length ? [{terms,page:rule.page,tier,quality,weapon,exclude}] : [];
     });
   }
   function matchingInventoryRule(bonuses, rules, tier, quality, weaponType, bossGear) {
@@ -7484,10 +7494,10 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
     let best;
     let bestSpecificity = 0;
     for (const rule of rules) {
-      const specificity = rule.terms.length + Number(rule.tier > 0) + Number(rule.quality > 0) + Number(Boolean(rule.weapon));
+      const specificity = rule.terms.length + Number(rule.tier > 0) + Number(rule.quality > 0) + Number(Boolean(rule.weapon)) + Number(Boolean(rule.exclude?.length));
       if (specificity <= bestSpecificity) continue;
       if ((rule.tier && (!Number.isInteger(tier) || tier < rule.tier)) || quality < rule.quality) continue;
-      if (!inventoryWeaponMatches(rule.weapon,weaponType,bossGear)) continue;
+      if (!inventoryWeaponMatches(rule.weapon,weaponType,bossGear) || inventoryTypeExcluded(rule.exclude,weaponType)) continue;
       if (rule.terms.every(term => bonuses.some(bonus => inventoryTerms[term].test(bonus)))) {
         best = rule;
         bestSpecificity = specificity;
@@ -7568,7 +7578,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
       .filter(validGearTier).sort((a,b)=>a-b);
     tierOptions.append(...availableTiers.map(tier=>new Option("Tier "+tier,String(tier))));
     form.append(tierOptions,"Tier 為最低階級。填 4 代表 T4 以上，0 表示不限。");
-    function addRule({terms = [],page = 1,tier = 0,quality = 0,weapon = ""} = {}) {
+    function addRule({terms = [],page = 1,tier = 0,quality = 0,weapon = "",exclude = []} = {}) {
       const fieldset = document.createElement("fieldset");
       fieldset.style.cssText = "min-width:0;border:1px solid #a8b9d5;border-radius:6px;padding:6px";
       const destination = document.createElement("select");
@@ -7598,6 +7608,18 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
         ...Object.entries(inventoryArmorTypes).map(([key,[label]]) => new Option("只留"+label,key)),
         ...Object.entries(inventoryWeaponTypes).map(([key,[label]]) => new Option("只留"+label,key)));
       weaponField.value = weapon;
+      const exclusionBox=document.createElement("details"),exclusionTitle=document.createElement("summary");
+      const exclusionChoices=document.createElement("div");exclusionChoices.style.cssText="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px";
+      const excludedFields=[];
+      for(const [key,[label]]of Object.entries(inventoryArmorTypes))excludedFields.push([key,checkbox(exclusionChoices,label,exclude.includes(key))]);
+      const allWeapons=checkbox(exclusionChoices,"武器（全部）",exclude.includes("weapon"));
+      const weaponExclusions=Object.entries(inventoryWeaponTypes).map(([key,[label]])=>[key,checkbox(exclusionChoices,label,exclude.includes("weapon") || exclude.includes(key))]);
+      excludedFields.push(...weaponExclusions);
+      const readExcluded=()=>[...excludedFields.filter(([key,input])=>input.checked && (!allWeapons.checked || !Object.hasOwn(inventoryWeaponTypes,key))).map(([key])=>key),...(allWeapons.checked?["weapon"]:[])];
+      const updateExcluded=()=>{const selected=weaponExclusions.filter(([,input])=>input.checked).length;allWeapons.checked=selected===weaponExclusions.length;allWeapons.indeterminate=selected>0&&!allWeapons.checked;exclusionTitle.textContent="項目除外（"+readExcluded().length+"）";};
+      allWeapons.onchange=()=>{for(const [,input]of weaponExclusions)input.checked=allWeapons.checked;updateExcluded();};
+      for(const [,input]of excludedFields)input.onchange=updateExcluded;
+      updateExcluded();exclusionBox.append(exclusionTitle,"勾選的項目不適用這條規則；其他規則與指定存倉仍各自判定。",exclusionChoices);
       const copy = document.createElement("button");
       copy.type = "button";
       copy.textContent = "複製此規則";
@@ -7606,6 +7628,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
         tier:tierField.valueAsNumber,
         quality:Number(qualityField.value),
         weapon:weaponField.value,
+        exclude:readExcluded(),
         terms:fields.filter(([,input]) => input.checked).map(([term]) => term)
       });
       const remove = document.createElement("button");
@@ -7614,13 +7637,13 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
       const choices = document.createElement("div");
       choices.style.cssText = "display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px";
       const fields = Object.keys(inventoryTerms).map(term => [term,checkbox(choices,term,terms.includes(term))]);
-      const row = {destination,tierField,qualityField,weaponField,fields};
+      const row = {destination,tierField,qualityField,weaponField,fields,readExcluded};
       remove.onclick = () => {
         rows.splice(rows.indexOf(row),1);
         fieldset.remove();
       };
       rows.push(row);
-      fieldset.append(destination,tierField,qualityField,weaponField,copy,remove,choices);
+      fieldset.append(destination,tierField,qualityField,weaponField,exclusionBox,copy,remove,choices);
       list.append(fieldset);
     }
     if (savedRules.length) savedRules.forEach(addRule);
@@ -7644,8 +7667,8 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
     form.onsubmit = event => {
       event.preventDefault();
       if (account !== activeAccount || account === "local") return;
-      const rules = rows.map(({destination,tierField,qualityField,weaponField,fields}) => ({
-        page:Number(destination.value),tier:tierField.valueAsNumber,quality:Number(qualityField.value),weapon:weaponField.value,terms:fields.filter(([,input]) => input.checked).map(([term]) => term)
+      const rules = rows.map(({destination,tierField,qualityField,weaponField,fields,readExcluded}) => ({
+        page:Number(destination.value),tier:tierField.valueAsNumber,quality:Number(qualityField.value),weapon:weaponField.value,exclude:readExcluded(),terms:fields.filter(([,input]) => input.checked).map(([term]) => term)
       }));
       if (rules.some(rule=>rule.tier !== 0 && !validGearTier(rule.tier))) {
         feedback.textContent = "裝備 Tier 請輸入非負整數";
@@ -7993,7 +8016,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
     if (run.phase === "scan") {
       if (!warehouse) return finish("倉庫已關閉，裝備整理已停止");
       const cells = [...warehouse.querySelectorAll("#ks-bag [data-uid]")];
-      const filterByType = rules.some(setting => setting.weapon);
+      const filterByType = rules.some(inventoryNeedsType);
       let gameGear;
       if (filterByType || settings.requireFixed) {
         try { gameGear = JSON.parse(document.documentElement.dataset.roHelperGearSlots || "null"); } catch {}
@@ -8057,8 +8080,8 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
         const canSell = settings.sell || (manual && rules.length > 0 && !target);
         if (!rule && canSell &&
             (Number.isInteger(tier) || (!targetStorageRules.size && !rules.some(setting => setting.tier))) &&
-            (target || ((weaponType !== null || !rules.some(setting => setting.weapon)) &&
-              (weaponType !== "headgear" || !rules.some(setting => setting.weapon?.startsWith("head_")))))) run.reject.add(uid);
+            (target || ((weaponType !== null || !rules.some(inventoryNeedsType)) &&
+              (weaponType !== "headgear" || !rules.some(setting => setting.weapon?.startsWith("head_") || setting.exclude?.some(key=>key.startsWith("head_"))))))) run.reject.add(uid);
       }
       const next = find("#ks-bp-next:not(:disabled)");
       if (next) {
