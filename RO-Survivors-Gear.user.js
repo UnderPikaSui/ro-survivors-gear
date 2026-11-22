@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 79.1
+// @version 80.0
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -4168,7 +4168,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V79.1 網頁控制特別版";
+  const versionName = "Gear V80.0 網頁控制特別版";
   let runtimeInvalidated = false;
   const button = document.createElement("button");
   button.type = "button";
@@ -8479,6 +8479,22 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
     writeSetting("ro-helper-card-stop-target",targetCount.value);
   });
   loadCardStopTarget();
+  function createPausedBattleResume() {
+    let lastClick=0;
+    return function resumePausedBattle(now=Date.now()) {
+      if(!window.__roMenuHelper || document.body.classList.contains("in-lobby") ||
+          !document.querySelector("#hud:not(.hidden)") || document.querySelector("#gameover:not(.hidden)"))return false;
+      const pause=document.querySelector("#pause:not(.hidden)");
+      if(!pause || !pause.getClientRects().length || getComputedStyle(pause).visibility!=="visible")return false;
+      // Leave open settings/confirmation dialogs alone. Use only the pause menu's native button.
+      if(document.querySelector("#options:not(.hidden),dialog[open],#picker:not(.hidden):not(.closing)"))return false;
+      const resume=pause.querySelector("#btn-resume");
+      if(!resume || resume.disabled || !resume.getClientRects().length || getComputedStyle(resume).visibility!=="visible")return false;
+      if(lastClick && now>=lastClick && now-lastClick<1000)return true;
+      lastClick=now;resume.click();status.textContent="偵測到遊戲暫停，已自動繼續";
+      return true;
+    };
+  }
   function inBattleReadyForBank(hud,picker) {
     return Boolean((hud || picker) && !document.body.classList.contains("in-lobby") &&
       !document.querySelector("#gameover:not(.hidden)"));
@@ -9642,6 +9658,7 @@ let countedBaseSettlement = Boolean(document.querySelector("#gameover:not(.hidde
 showTimers(startedAt);
 let hansHighDifficultyUntil = 0;
 const levelCardStop = createLevelCardStop();
+const resumePausedBattle = createPausedBattleResume();
 window.addEventListener("pagehide",levelCardStop.reset);
 const timer=setInterval(()=>{try {
   if (recycleReading || recycleDialog?.open || cardRecycleActive || upgradeActive || document.getElementById("ro-helper-upgrade-settings")?.open || document.getElementById("ro-helper-transfer-settings")?.open) { release(); return; }
@@ -9754,6 +9771,7 @@ const timer=setInterval(()=>{try {
     release();
     return;
   }
+  if(resumePausedBattle()){release();return;}
 
   if (dropIdentity?.account === activeAccount && !dropUploadPending && Date.now() >= nextDropUpload) {
     nextDropUpload = Date.now() + 5000;
