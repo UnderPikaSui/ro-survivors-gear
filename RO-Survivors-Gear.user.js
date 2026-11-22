@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 79.0
+// @version 79.1
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -4168,7 +4168,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V79.0 網頁控制特別版";
+  const versionName = "Gear V79.1 網頁控制特別版";
   let runtimeInvalidated = false;
   const button = document.createElement("button");
   button.type = "button";
@@ -5454,6 +5454,16 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
       .finally(() => { coordinateRequest = undefined; });
     return coordinateRequest;
   };
+  let lastLootCoordinateRetryAt=0;
+  function ensureLootCoordinateConnection(packet,inBattle,now=Date.now()) {
+    if(!inBattle || coordinateRequest)return;
+    const age=now-Number(packet?.at);
+    if(Number.isFinite(age) && age>=0 && age<750)return;
+    if(lastLootCoordinateRetryAt && now>=lastLootCoordinateRetryAt && now-lastLootCoordinateRetryAt<5000)return;
+    lastLootCoordinateRetryAt=now;
+    // Loot capture must reconnect even when movement is disabled or a banked card is open.
+    void connectCoordinates(false,true);
+  }
   share.onclick = () => { if (ensureRuntime()) void connectCoordinates(true, true); };
   const taiwanGame = location.hostname === "ro.hans-webgametw.com";
   const difficultyFields = [
@@ -9692,6 +9702,7 @@ const timer=setInterval(()=>{try {
     pendingStageCommand = undefined;
   }
   const lootPacket = readLivePacket();
+  ensureLootCoordinateConnection(lootPacket,Boolean(battleHud) && !inLobby && !document.querySelector("#gameover:not(.hidden)"));
   if (taiwanGame && (!battleHud || stageMode.value !== "boss")) {
     bossLootEmptySince = undefined;
     delete document.documentElement.dataset.roHelperBossCleanup;
