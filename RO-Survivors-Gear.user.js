@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 80.0
+// @version 80.1
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -4168,7 +4168,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V80.0 網頁控制特別版";
+  const versionName = "Gear V80.1 網頁控制特別版";
   let runtimeInvalidated = false;
   const button = document.createElement("button");
   button.type = "button";
@@ -5035,7 +5035,8 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
   };
   const skillNameKey = name => name.normalize("NFKC").trim().toLowerCase();
   const skillNameIndex = new Map(Object.values(jobSkillNames).flatMap(row => row.map(name => [skillNameKey(name),row])));
-  const normalizeSkill = name => skillNameIndex.get(skillNameKey(name))?.[taiwanGame ? 0 : 1] ?? name.trim();
+  const bowBasicAliases=new Set(["攻擊:弓","弓普攻","弓普通攻擊","attack:bow","basicattack:bow","ataque:arco"]);
+  const normalizeSkill = name => bowBasicAliases.has(skillNameKey(name).replace(/\s+/g,"")) ? (taiwanGame?"攻擊：弓":"Attack: Bow") : skillNameIndex.get(skillNameKey(name))?.[taiwanGame ? 0 : 1] ?? name.trim();
   const skillCardName = card => card.querySelector(".pk-name")?.textContent.trim() || "";
   const skillMatches = (name,actual) => skillNameKey(normalizeSkill(name)) === skillNameKey(normalizeSkill(actual));
   const skillJobIndex = new Map(Object.entries(skillJobs).flatMap(([id,[,aliases]]) => aliases.map(name => [skillNameKey(name),id])));
@@ -5714,13 +5715,14 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
     }
     return null;
   }
-  function findSkillBanish(picker, names, basic, visible, used, boltsOnly) {
+  function findSkillBanish(picker, names, basic, visible, used, boltsOnly, protectedFocus = "") {
     if (!names.length && !basic && !boltsOnly) return null;
     let basicAction = null;
     for (const slot of picker?.querySelectorAll("#pk-cards .pk-slot") ?? []) {
       const card = slot.querySelector(".pk-card");
       const name = card?.querySelector(".pk-name")?.textContent.trim();
       if (!name) continue;
+      if(protectedFocus && skillMatches(protectedFocus,name))continue;
       // New skills have a ribbon. The game offers their upgrades only after acquisition.
       const basicAttack = isBasicAttack(name);
       if (boltsOnly && elementalArrowOf(card)) continue;
@@ -10047,7 +10049,7 @@ const treasureName = card => treasureCardName(card,card.querySelector(".pk-name"
   const picker = document.querySelector("#picker:not(.hidden):not(.closing)");
   const levelGoals=skillPlan.enabled ? skillLevelConfig() : null;
   const eligibleBanish=banishSkills().filter(name=>!levelGoals || !(levelGoals.names || skills()).some((goal,index)=>Number(levelGoals.targets?.[index])>0 && skillMatches(goal,name)));
-  const banish = findSkillBanish(picker, eligibleBanish, banishBasic(), visible, usedBanish, boltsOnly);
+  const banish = findSkillBanish(picker, eligibleBanish, banishBasic(), visible, usedBanish, boltsOnly, boltsOnly ? "" : focusSkill());
   if (banish) {
     usedBanish.add(banish.button);
     status.textContent = "已按放逐：" + banish.name;
@@ -10069,7 +10071,7 @@ const rankedDiscovery = discoveryModeForTreasure ? cards.map(card=>({
 const focusNames = discoveryModeForTreasure
   ? (discoveryFocused.size < 2 ? rankedDiscovery.map(entry=>entry.name).filter(name=>!discoveryFocused.has(normalizeTreasure(name))) : [])
   : chest ? treasureFocusKeys.map(focusTreasure)
-  : discoveryTreasureMode() && discoveryFocused.size < 2 ? [] : [focusSkill()];
+  : [focusSkill()];
 if (boltsOnly && !elementalArrows.some(([, zh, en]) => [zh,en].includes(focusNames[0]))) focusNames.length = 0;
 for (const focusName of firstDiscoveryChoice ? [] : focusNames) {
   const focusAction = findFocusAction(picker, focusName, chest, visible, usedFocus);
