@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 82.0
+// @version 83.0
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -73,6 +73,13 @@
     }});
   }
   enableNativeLazyTextures();
+  document.addEventListener("ro-helper-read-raid",()=>{
+    try{document.documentElement.dataset.roHelperRaidActive=window.RO_RAID?.inRaid?.()?"on":"off";}catch{document.documentElement.dataset.roHelperRaidActive="off";}
+  });
+  document.addEventListener("ro-helper-open-raid",()=>{
+    if(location.hostname!=="ro.hans-webgametw.com" || !document.body.classList.contains("in-lobby"))return;
+    try{window.RO_RAIDNPC?.open?.("raid");}catch{}
+  });
 
   if (location.hostname === "ro.hans-webgametw.com") {
     const byAffixes = new WeakMap();
@@ -2743,6 +2750,33 @@ function watchLocalPickups(game, dataset, watched) {
   watched.add(game);
 }
 
+function readRaidWaypoint(game) {
+  if(document.documentElement.dataset.roHelperRaidActive!=="on" || game.state!=="playing")return null;
+  const {x,y}=game.player;
+  let target=null;
+  const arrow=document.getElementById("rd-arrow"),w=game.world3d;
+  if(arrow && arrow.style.display!=="none" && w?.project){
+    const m=arrow.style.transform.match(/translate\(\s*(-?[\d.]+)px,\s*(-?[\d.]+)px\)/);
+    if(m){
+      const p=w.project(x,y,0),a=w.project(x+32,y,0),b=w.project(x,y+32,0);
+      const ux=a.x-p.x,uy=a.y-p.y,vx=b.x-p.x,vy=b.y-p.y,det=ux*vy-uy*vx;
+      if(Math.abs(det)>1e-6){const sx=+m[1]-p.x,sy=+m[2]-p.y,dx=(sx*vy-sy*vx)/det*32,dy=(sy*ux-sx*uy)/det*32,len=Math.hypot(dx,dy);
+        if(Number.isFinite(len)&&len>1){const scale=Math.min(1,300/len);target={x:x+dx*scale,y:y+dy*scale};}}
+    }
+  }
+  if(!target){
+    const enemies=(game.enemies||[]).filter(e=>!e.dead && e.roT && Number.isFinite(e.x)&&Number.isFinite(e.y));
+    const e=enemies.sort((a,b)=>Math.hypot(a.x-x,a.y-y)-Math.hypot(b.x-x,b.y-y))[0];
+    if(e && Math.hypot(e.x-x,e.y-y)>145)target=e;
+  }
+  if(!target)return null;
+  const tx=Math.max(game.bounds.x0,Math.min(game.bounds.x1,target.x)),ty=Math.max(game.bounds.y0,Math.min(game.bounds.y1,target.y));
+  const nearest=game.walk?.nearestWalkable?.(tx,ty)||[tx,ty];
+  const path=game.walk?.pathTo?.(x,y,...nearest)||[];
+  const p=path.find(p=>Math.hypot(p.x-x,p.y-y)>12);
+  return p ? [p.x,p.y] : null;
+}
+
 function readGearWaypoint(game, cleanup, cache, now, magnet = false) {
   const {x,y} = game.player;
   const isGear = item => !item.dead && (magnet ? item.kind === "magnet" : item.kind === "loot" || item.kind === "card" || (cleanup && game.stageId === "louyang" && item.kind === "ball"));
@@ -3181,7 +3215,7 @@ function maintainNativeMemory(game,root,now=Date.now()) {
     }
     readHazards(z);
     if (!direction) return;
-    try { (() => { const root = document.documentElement; if (!z?.player || performance.now() - Number(root.dataset.roHelperLast || 0) < 100) return false; const {x,y} = z.player; const partyLeader = readPartyLeader(z, performance.now()); const cleanup = victoryCleanup(z,root.dataset,Date.now(),victoryEmptySince,location.hostname !== "ro.hans-webgametw.com"); watchLocalPickups(z,root.dataset,pickupWatch); const finalBoss = activeFinalBoss(z); const gearWaypoint = !finalBoss && root.dataset.roHelperTimedMagnet!=='on' && root.dataset.roHelperStationaryMagnet!=='on' && readGearWaypoint(z,cleanup || root.dataset.roHelperBossCleanup==='on',gearPaths,performance.now()); const prioritizeMagnet = root.dataset.roHelperPriorityMagnet==='on'; const magnetCleanup = cleanup || root.dataset.roHelperBossCleanup==='on'; const magnetWaypoint = !finalBoss && (prioritizeMagnet || (magnetCleanup && z.pickups.some(e=>!e.dead&&(e.kind==='loot'||e.kind==='card')))) ? readGearWaypoint(z,Boolean(magnetCleanup),magnetPaths,performance.now(),true) : null; const waypoint = (prioritizeMagnet && magnetWaypoint) || gearWaypoint || magnetWaypoint; const reach = waypoint ? Math.max(24,Math.min(60,Math.hypot(waypoint.x-x,waypoint.y-y))) : 60; const routes = [[1,0],[0,1],[-1,0],[0,-1],[1,-1],[1,1],[-1,1],[-1,-1]].map(([dx,dy]) => { const length=Math.hypot(dx,dy); const [vx,vy]=direction(dx/length,dy/length); const clearAt = length => [.2,.4,.6,.8,1].every(fraction=>{const step=length*fraction;const tx=x+vx*step,ty=y+vy*step;return tx>=z.bounds.x0&&tx<=z.bounds.x1&&ty>=z.bounds.y0&&ty<=z.bounds.y1&&(!z.walk||z.walk.walkable(tx,ty))});const distance = [reach,reach/2,reach/4].find(clearAt) || reach; return [x+vx*distance,y+vy*distance,clearAt(distance)] }); const nearby=e=>!e.dead&&Math.hypot(e.x-x,e.y-y)<520; root.dataset.roHelperLive=JSON.stringify({at:Date.now(),battleSeconds:z.time,stageId:z.stageId,lap:Number(z.difficulty?.lap)||1,baseLevel:z.charExp?.level,expeditionFlags:{story:Boolean(z.story),endless:Boolean(z.endless)},runBaseExp:z.endless ? null : z.charExp?.base,bossFarm:{intruderId:z.script?.intruder?.id||null,gear:root.dataset.roHelperBossCleanup==='on'?z.pickups.filter(e=>!e.dead&&(e.kind==='loot'||e.kind==='card')).map(e=>[e.kind,e.x,e.y]):null,solo:!z.coop&&!z.story&&!z.endless,playing:z.state==='playing',bosses:(z.bosses||[]).filter(e=>e.def?.boss).map(e=>[e.def.id,e.def.name]),kills:Object.fromEntries([...new Set([...(z.script?.bosses||[]).map(e=>e.id),...(z.script?.intruder?.id?[z.script.intruder.id]:[]),...(z.bosses||[]).map(e=>e.def?.id).filter(Boolean)])].map(id=>[id,z.killsBy?.get(id)||0])),maze:z.stageId==='maze'?(z.script?.bosses||[]).map(e=>[e.id,e.t]):[]},skillTargets:Object.fromEntries((z.weapons||[]).flatMap(weapon=>{if(typeof weapon.id!=='string')return [];try{const mod=weapon.mod?.(z);const bonus=(weapon.up?.targets||0)+(mod?.targets||0);const count=weapon.countUnit?.()==='objetivo'&&mod?.count>0?mod.count:bonus>0?1+bonus:weapon.targets?.(z);return Number.isSafeInteger(count)&&count>0?[[weapon.id,count]]:[]}catch{return []}})),discoveryBonus:Number.isFinite(z.stats?.discovery)?z.stats.discovery:null,lootRunId:publishLootSnapshot(z),player:[x,y],finalBoss:finalBoss ? [finalBoss.x,finalBoss.y] : null,...partyLeader,cleanup,gearWaypoint,magnetWaypoint,routes,zeny:z.zeny,chestCost:z.chestCost(),hazards:readHazards(z),enemyShots:sampleEnemyShots(z,enemyShotCache),bell:readBell(z),enemies:z.enemies.filter(nearby).map(e=>[e.x,e.y]),drops:z.pickups.filter(e=>!e.dead&&(e.kind==='loot'||e.kind==='card'||e.kind==='magnet'||Math.hypot(e.x-x,e.y-y)<650)).map(e=>[e.kind,e.x,e.y])});root.dataset.roHelperLast=String(performance.now());return false })(); setPhase(""); delete document.documentElement.dataset.roHelperError; } catch (error) {
+    try { (() => { const root = document.documentElement; if (!z?.player || performance.now() - Number(root.dataset.roHelperLast || 0) < 100) return false; const {x,y} = z.player; const partyLeader = readPartyLeader(z, performance.now()); const cleanup = victoryCleanup(z,root.dataset,Date.now(),victoryEmptySince,location.hostname !== "ro.hans-webgametw.com"); watchLocalPickups(z,root.dataset,pickupWatch); const finalBoss = activeFinalBoss(z); const gearWaypoint = !finalBoss && root.dataset.roHelperTimedMagnet!=='on' && root.dataset.roHelperStationaryMagnet!=='on' && readGearWaypoint(z,cleanup || root.dataset.roHelperBossCleanup==='on',gearPaths,performance.now()); const prioritizeMagnet = root.dataset.roHelperPriorityMagnet==='on'; const magnetCleanup = cleanup || root.dataset.roHelperBossCleanup==='on'; const magnetWaypoint = !finalBoss && (prioritizeMagnet || (magnetCleanup && z.pickups.some(e=>!e.dead&&(e.kind==='loot'||e.kind==='card')))) ? readGearWaypoint(z,Boolean(magnetCleanup),magnetPaths,performance.now(),true) : null; const waypoint = (prioritizeMagnet && magnetWaypoint) || gearWaypoint || magnetWaypoint; const reach = waypoint ? Math.max(24,Math.min(60,Math.hypot(waypoint.x-x,waypoint.y-y))) : 60; const routes = [[1,0],[0,1],[-1,0],[0,-1],[1,-1],[1,1],[-1,1],[-1,-1]].map(([dx,dy]) => { const length=Math.hypot(dx,dy); const [vx,vy]=direction(dx/length,dy/length); const clearAt = length => [.2,.4,.6,.8,1].every(fraction=>{const step=length*fraction;const tx=x+vx*step,ty=y+vy*step;return tx>=z.bounds.x0&&tx<=z.bounds.x1&&ty>=z.bounds.y0&&ty<=z.bounds.y1&&(!z.walk||z.walk.walkable(tx,ty))});const distance = [reach,reach/2,reach/4].find(clearAt) || reach; return [x+vx*distance,y+vy*distance,clearAt(distance)] }); const nearby=e=>!e.dead&&Math.hypot(e.x-x,e.y-y)<520; root.dataset.roHelperLive=JSON.stringify({at:Date.now(),battleSeconds:z.time,stageId:z.stageId,lap:Number(z.difficulty?.lap)||1,baseLevel:z.charExp?.level,expeditionFlags:{story:Boolean(z.story),endless:Boolean(z.endless)},runBaseExp:z.endless ? null : z.charExp?.base,bossFarm:{intruderId:z.script?.intruder?.id||null,gear:root.dataset.roHelperBossCleanup==='on'?z.pickups.filter(e=>!e.dead&&(e.kind==='loot'||e.kind==='card')).map(e=>[e.kind,e.x,e.y]):null,solo:!z.coop&&!z.story&&!z.endless,playing:z.state==='playing',bosses:(z.bosses||[]).filter(e=>e.def?.boss).map(e=>[e.def.id,e.def.name]),kills:Object.fromEntries([...new Set([...(z.script?.bosses||[]).map(e=>e.id),...(z.script?.intruder?.id?[z.script.intruder.id]:[]),...(z.bosses||[]).map(e=>e.def?.id).filter(Boolean)])].map(id=>[id,z.killsBy?.get(id)||0])),maze:z.stageId==='maze'?(z.script?.bosses||[]).map(e=>[e.id,e.t]):[]},skillTargets:Object.fromEntries((z.weapons||[]).flatMap(weapon=>{if(typeof weapon.id!=='string')return [];try{const mod=weapon.mod?.(z);const bonus=(weapon.up?.targets||0)+(mod?.targets||0);const count=weapon.countUnit?.()==='objetivo'&&mod?.count>0?mod.count:bonus>0?1+bonus:weapon.targets?.(z);return Number.isSafeInteger(count)&&count>0?[[weapon.id,count]]:[]}catch{return []}})),discoveryBonus:Number.isFinite(z.stats?.discovery)?z.stats.discovery:null,lootRunId:publishLootSnapshot(z),player:[x,y],raidWaypoint:readRaidWaypoint(z),finalBoss:finalBoss ? [finalBoss.x,finalBoss.y] : null,...partyLeader,cleanup,gearWaypoint,magnetWaypoint,routes,zeny:z.zeny,chestCost:z.chestCost(),hazards:readHazards(z),enemyShots:sampleEnemyShots(z,enemyShotCache),bell:readBell(z),enemies:z.enemies.filter(nearby).map(e=>[e.x,e.y]),drops:z.pickups.filter(e=>!e.dead&&(e.kind==='loot'||e.kind==='card'||e.kind==='magnet'||Math.hypot(e.x-x,e.y-y)<650)).map(e=>[e.kind,e.x,e.y])});root.dataset.roHelperLast=String(performance.now());return false })(); setPhase(""); delete document.documentElement.dataset.roHelperError; } catch (error) {
       document.documentElement.dataset.roHelperError = error.message;
     }
   },100);
@@ -4168,7 +4202,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V82.0 網頁控制特別版";
+  const versionName = "Gear V83.0 網頁控制特別版";
   let runtimeInvalidated = false;
   const button = document.createElement("button");
   button.type = "button";
@@ -4304,10 +4338,76 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
     return visit.at===at && visit.departed;
   }
 
+  const raidControls=document.createElement("div");
+  const raidMode=document.createElement("select");raidMode.setAttribute("aria-label","副本遠征");
+  raidMode.append(new Option("副本遠征：關","off"),new Option("副本：我能打的都可以","any"));
+  for(const [id,name] of [["r1","獸人的記憶"],["r2","章魚洞穴"],["r3","恐怖玩具工廠"],["r4","尼德霍格之巢"],["r5","驚駭森靈之巢"],["r6","舊格拉斯特海姆"],["r7","死者之國"],["r8","封印神殿"]])raidMode.append(new Option("副本："+name,id));
+  const raidRoll=document.createElement("select");raidRoll.setAttribute("aria-label","副本掉落擲骰");
+  for(const [id,name] of [["","手動擲骰"],["need","需要"],["greed","貪婪"],["pass","放棄"]])raidRoll.append(new Option("副本擲骰："+name,id));
+  const raidHelp=document.createElement("small");raidHelp.textContent="回城後快速加入、準備；隊長符合條件時倒數出發。每副本每日一次，失敗也計次。";
+  raidHelp.style.display="block";raidControls.append(raidMode,raidRoll,raidHelp);
+  const refreshRaidSettings=()=>{raidMode.value=readSetting("ro-helper-raid-mode")||"off";if(!raidMode.value)raidMode.value="off";raidRoll.value=readSetting("ro-helper-raid-roll")||"";};
+  raidMode.onchange=()=>{writeSetting("ro-helper-raid-mode",raidMode.value);raidNextAction=0;status.textContent=raidMode.value==="off"?"已關閉自動副本；已加入的團或配對請在遊戲中取消":"副本遠征已設定，回城後自動配對";};
+  raidRoll.onchange=()=>writeSetting("ro-helper-raid-roll",raidRoll.value);refreshRaidSettings();
+  let raidNextAction=0,raidResultSince=0;
+  function raidActive(){return document.documentElement.dataset.roHelperRaidActive==="on";}
+  function readRaidState(){document.dispatchEvent(new Event("ro-helper-read-raid"));return raidActive();}
+  function handleRaidExpedition(){
+    if(!taiwanGame)return false;
+    const active=readRaidState(),enabled=raidMode.value!=="off",now=Date.now();
+    if(!enabled)return false;
+    const shown=el=>!!el && !el.hidden && !el.closest(".hidden") && el.style.display!=="none";
+    const click=el=>{if(!shown(el)||el.disabled||now<raidNextAction)return false;raidNextAction=now+1200;el.click();return true;};
+    if(active){
+      const down=shown(document.getElementById("rd-dead"));
+      if(down){status.textContent="副本：倒地等待復活";return true;}
+      const choice=raidRoll.value;
+      if(choice){for(const box of document.querySelectorAll("#rd-roll .rd-it")){
+        const index={need:0,greed:1,pass:2}[choice];const b=box.querySelectorAll("button")[index];
+        if(click(b)){status.textContent="副本：已擲骰";return true;}
+      }}
+      const back=document.getElementById("rd-leave")||document.getElementById("rfx-back");
+      if(shown(back)){
+        raidResultSince ||= now;
+        // Native result may linger for final loot rolls. Retain its full 55-second window.
+        if(now-raidResultSince>=55000)click(back);
+        status.textContent="副本已結算，等待擲骰與掉落完成後返回";return true;
+      }
+      raidResultSince=0;return false;
+    }
+    raidResultSince=0;
+    if(document.getElementById("rg-count")){status.textContent="副本：等待倒數出發";return true;}
+    const chip=document.getElementById("rg-chip");
+    if(shown(chip)){
+      const open=document.getElementById("rg-chip-open");if(open && !document.getElementById("rg-win"))click(open);
+      const ready=document.getElementById("rg-w-ready");if(ready && ready.textContent.trim()==="準備好了")click(ready);
+      const go=document.getElementById("rg-w-go");if(go && !go.disabled && (!ready || ready.textContent.trim()!=="準備好了") && click(go))raidNextAction=now+10000;
+      status.textContent="副本：配對／等待團員與出發條件";return true;
+    }
+    if(!document.body.classList.contains("in-lobby"))return false;
+    if(worldBossActive() || shown(document.getElementById("wb-join")) || document.querySelector("#ro-helper-settings[open],#ro-helper-target-storage[open]"))return false;
+    const shop=document.getElementById("raidshop");
+    if(!shown(shop)){if(now>=raidNextAction){raidNextAction=now+10000;document.dispatchEvent(new Event("ro-helper-open-raid"));}status.textContent="副本：開啟遠征副本管理員";return true;}
+    const tab=shop.querySelector('[data-tab="raid"]');if(tab && !tab.classList.contains("primary")){click(tab);return true;}
+    const all=shop.querySelector('[data-rgf="all"]');if(all && !all.classList.contains("primary")){click(all);return true;}
+    const cards=[...shop.querySelectorAll("[data-rid].rg-card")];
+    const eligible=cards.filter(el=>!el.classList.contains("locked")&&!el.querySelector(".rg-done")&&!/…/.test(el.querySelector(".stg-state")?.textContent||"…"));
+    if(raidMode.value==="any"){
+      if(eligible.length && click(shop.querySelector('[data-rgq="any"]')))raidNextAction=now+10000;
+      status.textContent=eligible.length?"副本：快速加入可挑戰的副本":"副本：等待資格／今日次數，遊戲有可打副本才加入";return true;
+    }
+    const card=cards.find(el=>el.dataset.rid===raidMode.value);
+    if(!card){status.textContent="副本清單尚未提供所選副本";return true;}
+    if(!card.classList.contains("sel")){click(card);return true;}
+    const quick=shop.querySelector("#rg-quick");
+    if(eligible.includes(card) && click(quick))raidNextAction=now+10000;
+    status.textContent=quick?.disabled || !eligible.includes(card)?"副本：今日已參加或未達資格，等待遊戲開放":"副本：快速加入所選副本";return true;
+  }
+
   let worldBossNextAction=0;
   let worldBossResultAt=0;
   function handleWorldBoss() {
-    if (!taiwanGame) return false;
+    if (!taiwanGame || raidActive()) return false;
     const active=worldBossActive();
     document.documentElement.dataset.roHelperWorldBoss=active?"on":"off";
     if (active) {
@@ -4374,7 +4474,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
     "upgrade","character-growth","chest-discovery-threshold","chest-mode","collision-mode","difficulty","difficulty-solo","difficulty-party","difficulty-objective",
     "expedition-lap","expedition-speed","focus-skill","focus-treasure","focus-treasure-2","force-gear","inventory","inventory-tiers","login-character",
     "magnet-minutes","no-flip-level","panel","party-role","pickup-mode","roll-choice","skills","stage","stage-mode","stage-repeats","stage-rotation",
-    "gear-movement","gs-boss-cards","treasures","seen-stages","target-pickup","target-storage","treasure-category-priority","treasure-mode","treasure-priority","world-boss","world-boss-mode","world-boss-lead",
+    "gear-movement","gs-boss-cards","treasures","seen-stages","target-pickup","target-storage","treasure-category-priority","treasure-mode","treasure-priority","world-boss","world-boss-mode","world-boss-lead","raid-mode","raid-roll",
     "skill-level-plan","arrow-extra1","arrow-extra2","arrow-extra3","arrow-mode","arrow-starter","arrow-starter2","arrow-starter3","arrow-preference"
   ].map(key=>"ro-helper-"+key));
   portableSettingKeys.add("ro-helper-recycle-cards");
@@ -9841,8 +9941,9 @@ const timer=setInterval(()=>{try {
     trackSettlementLoot(settlement,currentLootRun);
   }
   if (settlement) lootBattleActive = false;
+  if (handleRaidExpedition()) { release(); return; }
   if (handleWorldBoss()) { release(); return; }
-  if (handleLobbySelection() || runCharacterGrowth() || runInventoryCleanup()) {
+  if (!raidActive() && (handleLobbySelection() || runCharacterGrowth() || runInventoryCleanup())) {
     release();
     return;
   }
@@ -9920,7 +10021,7 @@ const timer=setInterval(()=>{try {
     }
   }
   if(confirmDrop()){release();return}
-  if (taiwanGame && stageMode.value === "boss" && battleHud && lootPacket?.bossFarm && Math.abs(Date.now()-lootPacket.at)<750) {
+  if (taiwanGame && stageMode.value === "boss" && !raidActive() && battleHud && lootPacket?.bossFarm && Math.abs(Date.now()-lootPacket.at)<750) {
     const farm = lootPacket.bossFarm;
     const target = bossTarget.value;
     const defeated = target && farm.kills[target] > 0;
@@ -10090,7 +10191,7 @@ if (!partyMember && stageCards.length && !stageName) {
   status.textContent = "請在助手的關卡設定選擇關卡";
   return;
 }
-const hud=document.body.innerText;const pickerNode=document.querySelector("#picker:not(.hidden):not(.closing)");const visiblePicker=visible(pickerNode)?pickerNode:null;const pickerTitle=visiblePicker?.querySelector("#pk-title")?.textContent || "";const pickerSubtitle=visiblePicker?.querySelector("#pk-sub")?.textContent || "";const chest=!!visiblePicker && /寶箱|寶物箱|(?:treasure\s+)?chest|cofre/i.test(pickerTitle);const picking=!!visiblePicker && (chest || /升級|level\s*up/i.test(pickerTitle) || /(?:選擇|強化)\s*技能|(?:choose|upgrade)\s+(?:a\s+)?skill|elige una habilidad|mejora una habilidad/i.test(pickerSubtitle));if (!worldBossActive() && inBattleReadyForBank(battleHud,visiblePicker) && levelCardStop.act(picking ? visiblePicker : null,chest,discoveryBonus,
+const hud=document.body.innerText;const pickerNode=document.querySelector("#picker:not(.hidden):not(.closing)");const visiblePicker=visible(pickerNode)?pickerNode:null;const pickerTitle=visiblePicker?.querySelector("#pk-title")?.textContent || "";const pickerSubtitle=visiblePicker?.querySelector("#pk-sub")?.textContent || "";const chest=!!visiblePicker && /寶箱|寶物箱|(?:treasure\s+)?chest|cofre/i.test(pickerTitle);const picking=!!visiblePicker && (chest || /升級|level\s*up/i.test(pickerTitle) || /(?:選擇|強化)\s*技能|(?:choose|upgrade)\s+(?:a\s+)?skill|elige una habilidad|mejora una habilidad/i.test(pickerSubtitle));if (!raidActive() && !worldBossActive() && inBattleReadyForBank(battleHud,visiblePicker) && levelCardStop.act(picking ? visiblePicker : null,chest,discoveryBonus,
   Math.abs(Date.now()-lootPacket?.at) < 750 ? lootPacket.skillTargets : null)) { release(); return; }
 const inBattle=Boolean(battleHud)||(/\bEXP\b/.test(hud)&&/\b\d{2}:\d{2}\b/.test(hud)&&/\(\s*-?\d+\s*,\s*-?\d+\s*\)/.test(hud));if(inBattle){partyWaitingUntil=0;retriedSoloDialog=false}if(partyLeader&&!inBattle&&!picking&&!result&&Date.now()<partyWaitingUntil){release();return}if(partyMember&&!inBattle&&!picking&&!result){release();status.textContent=followLeader?"跟隨隊長：等待隊伍出發確認":"隊員模式：等待隊伍出發確認";return}if(!stageName&&!captain&&!inBattle&&!picking&&!result){status.textContent="請先開啟遠征選單";return}const stage=stageName===highestStageMode?highestPlayableStage(stageCards,rejectedStages,Boolean(go)):stageCards.find(card=>baseExpeditionName(stageNameOf(card))===stageName&&!stageIsLocked(card));let next;if(!picking){pickerFirstCard=null;attemptedCard=null;attempts=0;nextMenuAt=0}if(picking){release();const picker = document.querySelector("#picker");
 if (!picker || picker.classList.contains("hidden") || picker.classList.contains("closing")) return;
@@ -10285,7 +10386,8 @@ if (!stationaryMagnetOnly && !cleanup && followLeader && !evadingRed && (!leader
 }
 const timedMagnet = !worldBossActive() && gearPickupToggle.value === "timed";
 const timedMagnetDue = updateTimedMagnet(packet,true);
-const finalBossTarget = packet.finalBoss;
+const raidWaypoint=raidActive()?packet.raidWaypoint:null;
+const finalBossTarget = raidWaypoint || packet.finalBoss;
 const drops = worldBossActive() || finalBossTarget ? [] : cleanup?.gear ?? packet.drops;
 if (!finalBossTarget && cleanup && !drops.length && !evadingRed && !(stationaryMagnetOnly && collectionWaypoint)) {
   previousDirection = null;
@@ -10389,7 +10491,7 @@ if (leader) {
 if (finalBossTarget) {
   const approach = index => {
     const [x,y] = packet.routes[index];
-    return Math.abs(Math.hypot(x-finalBossTarget[0],y-finalBossTarget[1])-(worldBossShield()?850:worldBossActive()?250:145));
+    return Math.abs(Math.hypot(x-finalBossTarget[0],y-finalBossTarget[1])-(raidWaypoint?0:worldBossShield()?850:worldBossActive()?250:145));
   };
   return approach(i) < approach(best) ? i : best;
 }
@@ -10402,7 +10504,7 @@ return a.score < b.score ? i : best});const chosen=scores[best];
 if (!evadingRed) {
   const dodge = projectileDodge(packet,zones,shotAge,best);
   if (dodge !== null && dodge !== best) { sidestep(dodge); return; }
-}if(escaping){if(escapeDirection!==best||Date.now()>=escapeUntil){escapeDirection=best;escapeUntil=Date.now()+650}}else{escapeDirection=-1;escapeUntil=0}status.textContent=evadingRed?"座標｜閃避紅圈":usingMagnet?"走位：優先撿磁鐵":forced.length?"座標｜強制撿裝備／卡片":escaping?"座標｜走位：脫離怪群":finalBossTarget?(worldBossActive()?(worldBossShield()?"世界王｜護盾期間退開躲招":"世界王｜攻擊並優先閃避"):"座標｜尾王優先"):cleanup?"清場收尾：撿取裝備與卡片":followLeader?"座標｜跟隨隊長":(fresh?"座標｜":"畫面｜")+(chosen.chest?"走位：靠近寶箱":chosen.loot?(pickup?.kind === "magnet" ? "走位：靠近磁鐵" : pickup?.kind === "ball" ? "走位：撿燈籠節扭蛋" : "走位：靠近掉落物"):timedMagnet?(timedMagnetDue?"走位：等待可撿取的磁鐵":"走位：等待磁鐵間隔"):"走位：巡找掉落物");held=route[best];previousDirection=held;if(still>=2)status.textContent="座標未變：換方向避開卡點";for(const key of held)send("keydown",key);clearTimeout(movePulse);movePulse=setTimeout(release,escaping?155:chosen.uncertain?80:145)}else{status.textContent="已暫停走位："+captureStatus+""}}else if(picking){status.textContent="偵測到升級，但找不到可選卡片"}return}previousPosition=null;previousDirection=null;escapeDirection=-1;escapeUntil=0;release();if(picking)status.textContent="選擇技能："+label(next).split(/\n/).slice(0,4).join(" ");if(next!==last||next===go||next===stage)click(next)}catch(error){release();status.textContent="助手流程錯誤："+(error?.message||String(error));}},160);const stop=(preserveRefresh=false)=>{if(!preserveRefresh)clearRefreshCheckpoint();window.removeEventListener("pagehide",levelCardStop.reset);levelCardStop.reset();requestLobbyNpc("cancel");delete document.documentElement.dataset.roHelperBossCleanup;delete document.documentElement.dataset.roHelperSkipChest;delete document.documentElement.dataset.roHelperChestDiscovery;if(sharedVideo){sharedVideo.srcObject.getTracks().forEach(track=>track.stop());sharedVideo=null}clearInterval(timer);clearTimeout(movePulse);delete document.documentElement.dataset.roHelperWorldBoss;release();rotationProgress.textContent="";window.removeEventListener("blur",release);
+}if(escaping){if(escapeDirection!==best||Date.now()>=escapeUntil){escapeDirection=best;escapeUntil=Date.now()+650}}else{escapeDirection=-1;escapeUntil=0}status.textContent=evadingRed?"座標｜閃避紅圈":usingMagnet?"走位：優先撿磁鐵":forced.length?"座標｜強制撿裝備／卡片":escaping?"座標｜走位：脫離怪群":finalBossTarget?(worldBossActive()?(worldBossShield()?"世界王｜護盾期間退開躲招":"世界王｜攻擊並優先閃避"):raidWaypoint?"副本｜前往下一區／戰鬥目標":"座標｜尾王優先"):cleanup?"清場收尾：撿取裝備與卡片":followLeader?"座標｜跟隨隊長":(fresh?"座標｜":"畫面｜")+(chosen.chest?"走位：靠近寶箱":chosen.loot?(pickup?.kind === "magnet" ? "走位：靠近磁鐵" : pickup?.kind === "ball" ? "走位：撿燈籠節扭蛋" : "走位：靠近掉落物"):timedMagnet?(timedMagnetDue?"走位：等待可撿取的磁鐵":"走位：等待磁鐵間隔"):"走位：巡找掉落物");held=route[best];previousDirection=held;if(still>=2)status.textContent="座標未變：換方向避開卡點";for(const key of held)send("keydown",key);clearTimeout(movePulse);movePulse=setTimeout(release,escaping?155:chosen.uncertain?80:145)}else{status.textContent="已暫停走位："+captureStatus+""}}else if(picking){status.textContent="偵測到升級，但找不到可選卡片"}return}previousPosition=null;previousDirection=null;escapeDirection=-1;escapeUntil=0;release();if(picking)status.textContent="選擇技能："+label(next).split(/\n/).slice(0,4).join(" ");if(next!==last||next===go||next===stage)click(next)}catch(error){release();status.textContent="助手流程錯誤："+(error?.message||String(error));}},160);const stop=(preserveRefresh=false)=>{if(!preserveRefresh)clearRefreshCheckpoint();window.removeEventListener("pagehide",levelCardStop.reset);levelCardStop.reset();requestLobbyNpc("cancel");delete document.documentElement.dataset.roHelperBossCleanup;delete document.documentElement.dataset.roHelperSkipChest;delete document.documentElement.dataset.roHelperChestDiscovery;if(sharedVideo){sharedVideo.srcObject.getTracks().forEach(track=>track.stop());sharedVideo=null}clearInterval(timer);clearTimeout(movePulse);delete document.documentElement.dataset.roHelperWorldBoss;release();rotationProgress.textContent="";window.removeEventListener("blur",release);
   delete document.documentElement.dataset.roHelperFinishVictory;
   delete window[key];
   updateAssistantButton(false);
@@ -10614,7 +10716,7 @@ void connectCoordinates(false);
   content.style.cssText = "padding:5px;max-width:260px;max-height:calc(100vh - 64px);overflow:auto";
   const actions = document.createElement("div");
   actions.style.cssText = "display:flex;flex-direction:column;gap:6px;width:100%;box-sizing:border-box";
-  for (const control of [button, gpuSaver, ...(taiwanGame?[memorySaver,memoryCleanupButton,memoryCleanupReport,memoryStatusButton]:[]), autoLoginToggle, loginCharacterSetting, settingsTransferButton, ...(taiwanGame ? [worldBossToggle,worldBossMode,worldBossLeadRow] : []), lootButton, mobileDrops, settings, treasureButton, share, ...(taiwanGame ? [inventoryButton,cardRecycleButton,upgradeButton,gsAdvisorButton,growthButton,targetStorageButton] : [difficultyButton]), movementToggle, gearPickupToggle, magnetIntervalSetting, collisionMode, chestMode, chestDiscoverySetting, ...(taiwanGame ? [cardStopMode,noFlipSetting,targetStop] : []), rollChoice, partyMode, rerollToggle, skillFocus.select, ...treasureFocus.map(choice => choice.select)]) {
+  for (const control of [button, gpuSaver, ...(taiwanGame?[memorySaver,memoryCleanupButton,memoryCleanupReport,memoryStatusButton]:[]), autoLoginToggle, loginCharacterSetting, settingsTransferButton, ...(taiwanGame ? [worldBossToggle,worldBossMode,worldBossLeadRow,raidControls] : []), lootButton, mobileDrops, settings, treasureButton, share, ...(taiwanGame ? [inventoryButton,cardRecycleButton,upgradeButton,gsAdvisorButton,growthButton,targetStorageButton] : [difficultyButton]), movementToggle, gearPickupToggle, magnetIntervalSetting, collisionMode, chestMode, chestDiscoverySetting, ...(taiwanGame ? [cardStopMode,noFlipSetting,targetStop] : []), rollChoice, partyMode, rerollToggle, skillFocus.select, ...treasureFocus.map(choice => choice.select)]) {
     control.style.cssText = "background:#234b96;color:white;padding:5px 7px;border-radius:5px;cursor:pointer";
     actions.append(control);
   }
@@ -10654,7 +10756,7 @@ void connectCoordinates(false);
   addPanelGroup("裝備／角色整理",taiwanGame?[inventoryButton,cardRecycleButton,upgradeButton,gsAdvisorButton,targetStorageButton,growthButton]:[]);
   addPanelGroup("拾取設定",[gearPickupToggle,magnetIntervalSetting,chestMode,chestDiscoverySetting]);
   addPanelGroup("移動／系統",[movementToggle,collisionMode,share,gpuSaver,...(taiwanGame?[memorySaver,memoryCleanupButton,memoryCleanupReport,memoryStatusButton]:[]),autoLoginToggle,loginCharacterSetting]);
-  addPanelGroup("組隊／世界王",[partyMode,rollChoice,...(taiwanGame?[worldBossToggle,worldBossMode,worldBossLeadRow]:[])]);
+  addPanelGroup("組隊／副本／世界王",[partyMode,rollChoice,...(taiwanGame?[worldBossToggle,worldBossMode,worldBossLeadRow,raidControls]:[])]);
   addPanelGroup("掉落／設定備份",[lootButton,mobileDrops,settingsTransferButton]);
   if (!taiwanGame) stageSettings.append(difficultyButton);
   stageSettings.style.cssText = panelGroupStyle+";margin-top:6px;padding:0";
@@ -10917,7 +11019,7 @@ void connectCoordinates(false);
     document.querySelector("#ro-helper-target-storage[open]")?.close();
     activeAccount = nextAccount;
     refreshWorldBossToggle();
-    refreshWorldBossMode();
+    refreshWorldBossMode();refreshRaidSettings();
     loginCharacterInput.value = String(loginCharacterNumber());
     gearIdByUid.clear();
     loadTargetStorage();
