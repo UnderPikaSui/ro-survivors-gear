@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 83.0
+// @version 84.0
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -73,6 +73,223 @@
     }});
   }
   enableNativeLazyTextures();
+function createRaidMechanismObserver(now=()=>Date.now()) {
+  let owner=null;
+  const state={rid:null,me:0,aid:0,job:"",zone:0,zi:null,skew:0,targets:new Map(),players:new Map(),trait:{set:[]},safe:null,mark:null,shield:0,down:false,ended:false,seen:0};
+  const cleanTarget=t=>({id:String(t.id||""),kind:t.kind,mob:t.mob,name:t.name,at:Array.isArray(t.at)?t.at.slice(0,2):null,alive:!!t.alive,hp:t.hp,mhp:t.mhp,owner:t.owner,traits:(t.traits||[]).slice(0,12),hatch:!!t.hatch,spawn:!!t.spawn});
+  const cleanTrait=t=>({set:(Array.isArray(t?.set)?t.set:[]).slice(0,16).map(x=>({on:x.on,mult:x.mult})),until:t?.until,form:t?.form,win:t?.win});
+  const cleanZone=z=>z?{z:z.z,boss:!!z.boss,need:z.need,kills:z.kills,hold:z.hold?{at:Array.isArray(z.hold.at?.[0])?z.hold.at.slice(0,8).map(a=>a.slice(0,2)):z.hold.at?.slice(0,2),r:z.hold.r,secs:z.hold.secs,acc:z.hold.acc,accs:z.hold.accs?.slice(0,8),in:z.hold.in,need:z.hold.need,each:!!z.hold.each}:null}:null;
+  const targets=rows=>{for(const t of (rows||[]).slice(0,128)){if(!t?.id)continue;if(state.targets.size>=128&&!state.targets.has(String(t.id)))continue;state.targets.set(String(t.id),{...state.targets.get(String(t.id)),...cleanTarget(t)});}};
+  const players=rows=>{for(const a of (rows||[]).slice(0,64)){if(!Array.isArray(a)||!Number.isFinite(a[0])||![a[1],a[2]].every(Number.isFinite))continue;if(state.players.size>=64&&!state.players.has(a[0]))continue;state.players.set(a[0],{slot:a[0],x:a[1],y:a[2],flags:0});}};
+  function message(s,socket){
+    if(!s||typeof s.k!=="string"||!s.k.startsWith("rd.")||s.k.startsWith("rd.g."))return;
+    if(s.k==="rd.seat"||(s.k==="rd.back"&&s.rid&&s.char)){
+      owner=null;state.rid=s.rid;state.me=0;state.aid=s.char?.aid||0;state.job=s.char?.promotion||s.char?.job||"";state.zone=0;state.zi=null;state.next=null;state.targets.clear();state.players.clear();state.trait={set:[]};state.safe=null;state.mark=null;state.shield=0;state.down=false;state.ended=false;state.seen=now();return;
+    }
+    if(s.k==="rd.start"){
+      owner=socket;state.me=s.me;state.skew=Number.isFinite(s.now)?s.now-now():0;state.zone=s.zone||0;state.zi=cleanZone(s.zoneInfo);state.next=null;state.targets.clear();state.players.clear();targets(s.targets);players(s.players);state.trait=cleanTrait(s.trait);state.down=!!s.down;state.ended=s.state==='result';state.safe=null;state.mark=null;state.shield=0;
+    }else if(socket!==owner)return;
+    else if(s.k==="rd.zone"){state.zone=s.z;state.zi=cleanZone(s);}
+    else if(s.k==="rd.tgt")targets(s.add);
+    else if(s.k==="rd.dead"){const t=state.targets.get(String(s.id));if(t)t.alive=false;}
+    else if(s.k==="rd.hp"){
+      for(const a of (s.h||[]).slice(0,128)){const t=state.targets.get(String(a[0]));if(t){t.hp=a[1];t.mhp=a[2];t.alive=!!a[3];}}
+      if(Number.isFinite(s.sh))state.shield=s.sh>0?now()+state.skew+s.sh:0;
+    }else if(s.k==="rd.trait")state.trait=cleanTrait(s);
+    else if(s.k==="rd.boss"){targets(s.targets);if(s.trait)state.trait=cleanTrait(s.trait);}
+    else if(s.k==="rd.join")players([s.p]);
+    else if(s.k==="rd.leave")state.players.delete(s.s);
+    else if(s.k==="rd.door"){
+      state.zone=s.zone??state.zone;state.zi=null;
+      state.next=s.next?{at:s.next.slice(0,2),zone:s.zone}:null;
+    }else if(s.k==="rd.mech"){
+      if(s.m==='shield'&&Number.isFinite(s.until))state.shield=s.until;
+      if((s.m==='bell'||s.m==='curse')&&Number.isFinite(s.at)&&Number.isFinite(s.seed))state.safe={kind:s.m,until:s.at,seed:s.seed,n:Math.min(12,Math.max(1,s.n||3)),r:Math.min(1000,Math.max(20,s.r||150))};
+      if(s.m==='mark'&&Number.isFinite(s.at))state.mark={until:s.at,who:(s.who||[]).slice(0,64),r:Math.min(1500,Math.max(20,s.r||200))};
+    }else if(s.k==="rd.down")state.down=true;
+    else if(s.k==="rd.revive")state.down=false;
+    else if(s.k==="rd.end"||s.k==="rd.out"){state.ended=true;state.safe=null;state.mark=null;state.targets.clear();state.players.clear();owner=null;}
+    state.seen=now();
+  }
+  function binary(data,socket){
+    if(socket!==owner||state.ended)return;
+    try{const v=new DataView(data);if(v.byteLength<8||v.getUint8(0)!==0x52)return;const n=Math.min(64,v.getUint16(4,true));for(let i=0,o=8;i<n&&o+8<=v.byteLength;i++,o+=8){const slot=v.getUint16(o,true),p=state.players.get(slot);if(p){p.x=v.getInt16(o+2,true);p.y=v.getInt16(o+4,true);p.flags=v.getUint8(o+7);}}}catch{}
+  }
+  return {message,binary,state};
+}
+function raidZoneLayout(game,definition) {
+  const walk=game.walk;if(!walk?.mask||!walk.w||!walk.h)return null;
+  const W=walk.w,H=walk.h,mask=walk.mask.slice(),labels=new Int8Array(W*H).fill(-1),cells=definition.zones.map(()=>[]);
+  for(const z of definition.zones)for(const [x0,y0,x1,y1] of z.door?.cells||[])for(let y=y0;y<y1;y++)for(let x=x0;x<x1;x++)if(x>=0&&y>=0&&x<W&&y<H)mask[y*W+x]=0;
+  definition.zones.forEach((z,k)=>{const lab=z.reuse??k,q=[];for(const [sx,sy] of z.seeds||[]){const i=sy*W+sx;if(sx>=0&&sy>=0&&sx<W&&sy<H&&mask[i]&&labels[i]<0){labels[i]=lab;q.push(i);}}while(q.length){const i=q.pop(),x=i%W,y=(i/W)|0;cells[lab].push(i);for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){const nx=x+dx,ny=y+dy,j=ny*W+nx;if(nx>=0&&ny>=0&&nx<W&&ny<H&&labels[j]<0&&mask[j]){labels[j]=lab;q.push(j);}}}});
+  return {w:W,h:H,labels,cells};
+}
+function raidSafeSpots(definition,layout,seed,n,r) {
+  if(!layout)return [];
+  let a=seed||1;const rng=()=>{a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return ((t^t>>>14)>>>0)/4294967296;};
+  const px=c=>(c+.5)*32,bz=definition.zones.findIndex(z=>z.boss),lab=definition.zones[bz]?.reuse??bz,cx=px(definition.boss.at[0]),cy=px(definition.boss.at[1]),out=[];
+  const cells=(layout.cells[lab]||[]).filter(i=>{const d=Math.hypot(px(i%layout.w)-cx,px((i/layout.w)|0)-cy);return d>150&&d<750;});
+  for(let k=0;k<300&&out.length<n&&cells.length;k++){const c=cells[Math.floor(rng()*cells.length)],x=px(c%layout.w),y=px((c/layout.w)|0);if(out.every(q=>Math.hypot(q.x-x,q.y-y)>r*2.4)||k>200)out.push({x,y});}
+  while(out.length<n){const a=out.length/n*6.283;out.push({x:cx+Math.cos(a)*420,y:cy+Math.sin(a)*300});}return out;
+}
+function raidLane(job){
+  if(/^(mage|wizard|sage|warlock|sorcerer|acolyte|priest|arch_bishop|soul_linker|soul_reaper)$/.test(job))return 'magic';
+  if(/^(archer|hunter|bard|dancer|ranger|minstrel|wanderer|gunslinger|rebellion)$/.test(job))return 'ranged';
+  if(/^(swordsman|knight|crusader|rune_knight|royal_guard|thief|assassin|rogue|guillotine_cross|shadow_chaser|merchant|blacksmith|alchemist|mechanic|genetic|taekwon|star_gladiator|star_emperor|monk|sura)$/.test(job))return 'melee';return 'unknown';
+}
+function raidTraitMultiplier(traits,lane){
+  if(lane==='unknown')return 1;let m=1;
+  for(const t of traits||[]){if(t.on==='all'||t.on==='lane:'+lane||t.on===lane||t.on===(lane==='magic'?'magic':'physical'))m*=Number.isFinite(t.mult)?t.mult:1;}return m;
+}
+function planRaidObjective(s,definition,player,targets,now,spots) {
+  const distance=p=>Math.hypot(p.x-player.x,p.y-player.y),point=a=>({x:(a[0]+.5)*32,y:(a[1]+.5)*32});
+  const players=[...s.players.values()].filter(p=>!(p.flags&1)&&Number.isFinite(p.x)&&Number.isFinite(p.y)&&p.slot!==s.me);
+  const mark=s.mark&&s.mark.until>now?s.mark:null,marked=!!mark?.who.includes(s.me);
+  if(s.down||s.ended)return {kind:'wait',label:s.down?'副本｜倒地等待復活':'副本｜等待結算',target:null,stay:true};
+  if(s.safe&&s.safe.until>now&&spots.length){const danger=q=>(marked?players:players.filter(p=>mark?.who.includes(p.slot))).reduce((v,p)=>Math.min(v,Math.hypot(q.x-p.x,q.y-p.y)),Infinity);
+    const q=[...spots].sort((a,b)=>(Number(danger(a)<(mark?.r||0)+32)-Number(danger(b)<(mark?.r||0)+32))||distance(a)-distance(b))[0];return {kind:s.safe.kind,label:s.safe.kind==='bell'?'副本｜冥界之鐘：進安全圈':'副本｜世界樹詛咒：進生命之光',target:q,radius:Math.max(10,s.safe.r-32),stay:distance(q)<=s.safe.r-32,marked,players,mark};}
+  if(marked){
+    const angles=Array.from({length:16},(_,i)=>i*Math.PI/8),candidates=angles.map(a=>({x:player.x+Math.cos(a)*Math.max(220,mark.r+80),y:player.y+Math.sin(a)*Math.max(220,mark.r+80)}));
+    const clearance=q=>players.reduce((v,p)=>Math.min(v,Math.hypot(q.x-p.x,q.y-p.y)),Infinity);
+    const target=candidates.reduce((best,q)=>clearance(q)>clearance(best)?q:best,candidates[0]);
+    return {kind:'mark',label:'副本｜死神標記：遠離隊友',target,marked,players,mark,stay:clearance(player)>mark.r+40};
+  }
+  if(!s.zi&&s.next?.at)return {kind:'next',label:'副本｜通過已開啟的門前往下一區',target:point(s.next.at),stay:false,marked,players,mark};
+  const zi=s.zi,zone=definition.zones[s.zone],hold=zi?.hold;
+  if(hold&&!zi.boss&&zi.z===s.zone){
+    const each=!!hold.each,complete=each?(hold.accs||[]).map(a=>a>=hold.secs):[hold.acc>=hold.secs];
+    const raw=hold.at||zone?.hold?.at,ats=Array.isArray(raw?.[0])?raw:raw?[raw]:[];
+    const unfinished=ats.map((a,i)=>({...point(a),index:i})).filter(q=>!complete[each?q.index:0]);
+    if(unfinished.length){
+      const ids=[s.me,...players.map(p=>p.slot)].sort((a,b)=>a-b),rank=Math.max(0,ids.indexOf(s.me));
+      let q=each?unfinished[rank%unfinished.length]:unfinished[0];
+      const r=Math.max(32,(hold.r||zone?.hold?.r||4)*32-32);
+      // Keep an occupied unfinished seal stable; excess people spread in slot order.
+      if(each){const current=unfinished.find(p=>distance(p)<=r);if(current){const inside=[s.me,...players.filter(p=>Math.hypot(p.x-current.x,p.y-current.y)<=r).map(p=>p.slot)].sort((a,b)=>a-b);if(inside[0]===s.me)q=current;}}
+      return {kind:'hold',label:each?'副本｜分散守未完成封印（等待隊友同時守點）':'副本｜站在據點內守點',target:q,radius:r,stay:distance(q)<=r,marked,players,mark};
+    }
+  }
+  const lane=raidLane(s.job),alive=targets.filter(t=>t.alive);
+  const available=alive.filter(t=>raidTraitMultiplier(t.kind==='boss'?s.trait?.set:t.traits,lane)>0);
+  const priority=t=>t.kind==='src'?0:t.kind==='obj'?1:t.kind==='elite'||t.kind==='mid'?2:t.kind==='boss'?4:3;
+  const sorted=available.sort((a,b)=>priority(a)-priority(b)||distance(a)-distance(b));
+  const source=sorted.find(t=>t.kind==='src');
+  if(source)return {kind:'source',label:'副本｜優先處理補血源',target:source,radius:130,stay:distance(source)<=130,marked,players,mark};
+  const boss=alive.find(t=>t.kind==='boss'),multiplier=raidTraitMultiplier(s.trait?.set,lane),rotating=Number.isFinite(s.trait?.until)&&s.trait.until>now,blocked=boss&&(s.shield>now||multiplier<=0||(rotating&&multiplier<=.15));
+  const chosen=sorted.find(t=>!(t.kind==='boss'&&blocked));
+  if(chosen)return {kind:chosen.kind,label:chosen.kind==='obj'?'副本｜優先拆物件／蛋／蠅巢':chosen.kind==='boss'?'副本｜攻擊首領並躲招':'副本｜清除分區精英／中王',target:chosen,radius:130,stay:distance(chosen)<=130,marked,players,mark};
+  if(blocked){const d=distance(boss),dx=(player.x-boss.x)/(d||1),dy=(player.y-boss.y)/(d||1);return {kind:'shield',label:s.shield>now?'副本｜護盾期間退開躲招':'副本｜目前型態抗本職業，等待換型',target:{x:boss.x+(d?dx:1)*650,y:boss.y+(d?dy:0)*650},stay:d>=600,marked,players,mark};}
+  if(zi&&zi.need>0&&zi.kills<zi.need)return {kind:'kills',label:'副本｜清怪達成分區擊殺數',target:null,stay:false,marked,players,mark};
+  if(!zi&&s.next?.at)return {kind:'next',label:'副本｜通過已開啟的門前往下一區',target:point(s.next.at),stay:false,marked,players,mark};
+  return {kind:'wait',label:'副本｜等待分區目標與隊友',target:null,stay:true,marked,players,mark};
+}
+
+function installRaidMechanics(book) {
+  if(location.hostname!=="ro.hans-webgametw.com"||window.__roHelperRaidMechanics)return;
+  const observer=createRaidMechanismObserver(),telegraphs=new WeakMap(),games=new WeakMap();
+  const NativeSocket=window.WebSocket;
+  if(typeof NativeSocket==='function'){
+    window.WebSocket=new Proxy(NativeSocket,{construct(target,args,newTarget){
+      const socket=Reflect.construct(target,args,newTarget);
+      socket.addEventListener('message',event=>{
+        try{if(typeof event.data==='string'){if(event.data.length>1048576||! /"k"\s*:\s*"rd\.(?!g\.)/.test(event.data))return;const data=JSON.parse(event.data);observer.message(data,socket);}else observer.binary(event.data,socket);}catch{}
+      });
+      return socket;
+    }});
+  }
+  const wrap=fn=>{
+    if(typeof fn!=='function')return fn;
+    return function(game,actor,shape,ms,onHit){
+      const value=Reflect.apply(fn,this,arguments);
+      try {
+      if(!window.RO_RAID?.inRaid?.()||!game||!shape||!Number.isFinite(game.time)||!Number.isFinite(ms))return value;
+      if(!['circle','ring','cone','line'].includes(shape.kind)||![shape.x,shape.y].every(Number.isFinite))return value;
+      let list=telegraphs.get(game);if(!list){list=[];telegraphs.set(game,list);}
+      if(list.length>=256)list.splice(0,list.length-255);
+      const neutral=/^(?:\(\)\s*=>\s*\{\s*\}|function\s*\(\)\s*\{\s*\})$/.test(Function.prototype.toString.call(onHit||(()=>{})).trim());
+      const norm=shape.kind==='line'?['rect',shape.x+Math.cos(shape.ang)*shape.len*.5,shape.y+Math.sin(shape.ang)*shape.len*.5,shape.len,shape.w,shape.ang,0]:[shape.kind,shape.x,shape.y,shape.r*2,shape.r*2,shape.ang||0,shape.kind==='cone'?shape.half:shape.kind==='ring'?shape.r0/shape.r:0];
+      if(norm.slice(1).every(Number.isFinite))list.push({shape:norm,neutral,until:game.time*1000+Math.max(0,Math.min(ms,60000))+280,actor});
+      } catch {}
+      return value;
+    };
+  };
+  const descriptor=Object.getOwnPropertyDescriptor(window,'RO_WBTT');
+  if(!descriptor || descriptor.configurable){
+    let current=wrap(window.RO_WBTT);
+    Object.defineProperty(window,'RO_WBTT',{configurable:true,enumerable:descriptor?.enumerable??true,get:()=>current,set:value=>{current=wrap(value);}});
+  }
+  window.__roHelperRaidMechanics=game=>{
+    try{
+      if(!game?.player||!window.RO_RAID?.inRaid?.()||document.documentElement.dataset.roHelperRaidMechanics!=='on')return null;
+      const s=observer.state,rid=s.rid||/^raid_(r[1-8])$/.exec(game.stageId||'')?.[1],definition=book[rid];
+      if(!definition)return {enabled:true,ready:false,label:'副本｜無法辨識副本機制，等待資料'};
+      let cache=games.get(game);if(!cache){cache={layout:raidZoneLayout(game,definition),at:0,safeKey:'',spots:[],pathAt:0,pathKey:'',path:null};games.set(game,cache);}
+      if(!cache.layout&&game.walk?.mask)cache.layout=raidZoneLayout(game,definition);
+      const now=Date.now(),serverNow=now+s.skew;
+      if(cache.at&&now-cache.at<90)return cache.result;
+      const list=telegraphs.get(game)||[];
+      for(let i=list.length-1;i>=0;i--)if(list[i].until<game.time*1000||list[i].actor?.dead||list[i].actor?.removed)list.splice(i,1);
+      const result={enabled:true,ready:!!s.me&&!!s.zi||!!s.next,at:now,rid,label:'副本｜等待機制狀態',hazards:list.filter(t=>!t.neutral).map(t=>t.shape),neutral:list.filter(t=>t.neutral).map(t=>t.shape),waypoint:null,stay:true};
+      cache.at=now;cache.result=result;
+      if(!s.me||!s.seen||now-s.seen>20000){result.ready=false;result.label='副本｜機制資料中斷，等待連線恢復';return result;}
+      const player={x:game.player.x,y:game.player.y};
+      const pathTo=target=>{
+        if(!target||![target.x,target.y].every(Number.isFinite)||!game.walk?.pathTo)return null;
+        const end=game.walk.nearestWalkable?.(target.x,target.y)||[target.x,target.y];
+        if(Math.hypot(end[0]-target.x,end[1]-target.y)>64)return null;
+        const direct=game.walk.pathTo(player.x,player.y,...end);
+        if(direct?.length&&Math.hypot(direct.at(-1).x-target.x,direct.at(-1).y-target.y)<=80)return direct.slice();
+        // The native raid maps use open warp doors between disconnected rooms.
+        // Follow only the first physical leg; recompute after the actual teleport.
+        const legs=game.walk.route?.(player.x,player.y,...end),last=legs?.at(-1)?.at(-1);
+        if(!last||Math.hypot(last.x-target.x,last.y-target.y)>80||!legs[0]?.length)return null;
+        return legs[0].slice();
+      };
+      const entityById=new Map((game.enemies||[]).filter(e=>!e.dead&&e.roT).map(e=>[String(e.roT),e]));
+      cache.reachable ??= new Map();
+      const reachable=t=>{const key=t.id+':'+Math.floor(t.x/32)+','+Math.floor(t.y/32)+':'+Math.floor(player.x/96)+','+Math.floor(player.y/96),old=cache.reachable.get(key);if(old&&now-old.at<800)return old.ok;
+        const ok=!!pathTo(t);if(cache.reachable.size>=48)cache.reachable.delete(cache.reachable.keys().next().value);cache.reachable.set(key,{at:now,ok});return ok;};
+      const targetInZone=t=>{
+        if(!s.zi||!cache.layout)return true;
+        const cx=t.at[0],cy=t.at[1],{w,h,labels}=cache.layout,lab=definition.zones[s.zone]?.reuse??s.zone;
+        if(cx<0||cy<0||cx>=w||cy>=h)return false;const own=labels[cy*w+cx];return own<0||own===lab;
+      };
+      const targets=[...s.targets.values()].filter(t=>t.alive&&t.at&&targetInZone(t)).map(t=>{const e=entityById.get(t.id);return {...t,x:e?.x??(t.at[0]+.5)*32,y:e?.y??(t.at[1]+.5)*32};})
+        .sort((a,b)=>Math.hypot(a.x-player.x,a.y-player.y)-Math.hypot(b.x-player.x,b.y-player.y)).slice(0,16).filter(t=>Math.hypot(t.x-player.x,t.y-player.y)<140||reachable(t));
+      const safe=s.safe&&s.safe.until>serverNow?s.safe:null,key=safe?JSON.stringify(safe):'';
+      if(key!==cache.safeKey){cache.safeKey=key;cache.spots=safe?raidSafeSpots(definition,cache.layout,safe.seed,safe.n,safe.r):[];}
+      const spots=cache.spots.filter(q=>Math.hypot(q.x-player.x,q.y-player.y)<(safe?.r||0)||pathTo(q));
+      const plan=planRaidObjective(s,definition,player,targets,serverNow,spots);
+      Object.assign(result,{ready:true,kind:plan.kind,label:plan.label,stay:!!plan.stay,target:plan.target?[plan.target.x,plan.target.y]:null,radius:plan.radius||0,marked:plan.marked,players:plan.players?.map(p=>[p.x,p.y])||[],markRadius:plan.mark?.r||0});
+      if(safe&&!spots.length){result.stay=true;result.label='副本｜安全圈路徑無法確認，請檢查位置';result.ready=false;return result;}
+      if(plan.mark){for(const slot of plan.mark.who){if(slot===s.me)continue;const p=s.players.get(slot);if(p&&!(p.flags&1))result.hazards.push(['circle',p.x,p.y,plan.mark.r*2,plan.mark.r*2,0,0]);}}
+      if(plan.kind==='kills'){
+        const mobs=(game.enemies||[]).filter(e=>!e.dead&&e.roLocal).sort((a,b)=>Math.hypot(a.x-player.x,a.y-player.y)-Math.hypot(b.x-player.x,b.y-player.y));
+        for(const mob of mobs.slice(0,8)){if(Math.hypot(mob.x-player.x,mob.y-player.y)<=130){result.stay=true;break;}if(pathTo(mob)){plan.target=mob;break;}}
+      }
+      if(safe)for(const q of cache.spots)result.neutral.push(['circle',q.x,q.y,safe.r*2,safe.r*2,0,0]);
+      if(s.zi?.hold){
+        const h=s.zi?.hold,raw=h?.at||definition.zones[s.zone]?.hold?.at,ats=Array.isArray(raw?.[0])?raw:raw?[raw]:[];
+        const width=(h?.r||definition.zones[s.zone]?.hold?.r||4)*64;
+        for(const a of ats)result.neutral.push(['circle',(a[0]+.5)*32,(a[1]+.5)*32,width,width,0,0]);
+      }
+      if(!result.stay&&plan.target){
+        const key=plan.kind+':'+Math.round(plan.target.x/32)+','+Math.round(plan.target.y/32);
+        if(cache.pathKey!==key||now-cache.pathAt>300||!cache.path?.length){cache.pathKey=key;cache.pathAt=now;cache.path=pathTo(plan.target);}
+        if(cache.path?.length){
+          let nearest=0;for(let i=1;i<cache.path.length;i++)if(Math.hypot(cache.path[i].x-player.x,cache.path[i].y-player.y)<Math.hypot(cache.path[nearest].x-player.x,cache.path[nearest].y-player.y))nearest=i;
+          if(nearest)cache.path=cache.path.slice(nearest);
+          while(cache.path.length&&Math.hypot(cache.path[0].x-player.x,cache.path[0].y-player.y)<=18)cache.path.shift();
+        }
+        const step=cache.path?.[0];
+        if(step)result.waypoint=[step.x,step.y];else {result.stay=true;result.label+='（等待可通行路徑）';}
+      }
+      return result;
+    }catch{return {enabled:true,ready:false,label:'副本｜機制資料暫不可用，等待更新'};}
+  };
+}
+
+  installRaidMechanics({"r1":{"name":"獸人的記憶","zones":[{"name":"海岸村落","boss":false,"seeds":[[122,300]],"reuse":null,"door":{"warps":["Z1>Z2","Z2>Z1"]},"hold":null,"next":[219,252]},{"name":"村莊廣場","boss":false,"seeds":[[213,196]],"reuse":null,"door":{"warps":["Z2>Z3","Z3>Z2"]},"hold":null,"next":[120,233]},{"name":"祭壇前","boss":false,"seeds":[[113,262]],"reuse":null,"door":{"warps":["Z3>Z4","Z4>Z3"]},"hold":{"at":[113,262],"r":5,"secs":40,"frac":0.34},"next":[102,166]},{"name":"王房","boss":true,"seeds":[[155,149]],"reuse":null,"door":null,"hold":null,"next":null}],"boss":{"at":[155,140]}},"r2":{"name":"章魚洞穴","zones":[{"name":"中庭","boss":false,"seeds":[[105,187]],"reuse":null,"door":{"cells":[[116,109,144,110],[116,110,122,111],[123,110,137,111],[138,110,144,111],[116,111,144,112],[186,145,187,146],[186,146,189,153],[190,187,191,188],[190,188,193,192],[122,228,126,229],[134,228,138,229],[123,229,126,231],[134,229,137,231]]},"hold":null,"next":[128,103]},{"name":"四座殿堂","boss":false,"seeds":[[45,81],[213,220]],"reuse":null,"door":null,"hold":null,"next":[129,160]},{"name":"王房","boss":true,"seeds":[[105,187]],"reuse":1,"door":null,"hold":null,"next":null}],"boss":{"at":[129,170]}},"r3":{"name":"恐怖玩具工廠","zones":[{"name":"倉庫","boss":false,"seeds":[[61,197]],"reuse":null,"door":{"warps":["R1>R2","R2>R1"]},"hold":null,"next":[132,186]},{"name":"組裝線","boss":false,"seeds":[[183,219]],"reuse":null,"door":{"warps":["R2>R3","R3>R2"]},"hold":null,"next":[186,127]},{"name":"包裝區","boss":false,"seeds":[[183,111],[221,71]],"reuse":null,"door":{"warps":["R4>R0","R0>R4"]},"hold":null,"next":[159,39]},{"name":"王房","boss":true,"seeds":[[66,16]],"reuse":null,"door":null,"hold":null,"next":null}],"boss":{"at":[66,16]}},"r4":{"name":"尼德霍格之巢","zones":[{"name":"世界樹根","boss":false,"seeds":[[192,381]],"reuse":null,"door":{"cells":[[284,336,290,338],[284,338,291,339],[372,336,378,338],[371,338,378,339],[380,340,386,342]]},"hold":null,"next":[286,333]},{"name":"巢穴迴廊","boss":false,"seeds":[[302,297]],"reuse":null,"door":{"cells":[[236,280,242,282],[108,330,111,336],[110,336,111,337],[14,340,20,342]]},"hold":null,"next":[238,277]},{"name":"淨化祭壇","boss":false,"seeds":[[200,224]],"reuse":null,"door":{"warps":["N3>B","B>N3"]},"hold":{"at":[200,226],"r":6,"secs":45,"frac":0.34},"next":[200,142]},{"name":"王房","boss":true,"seeds":[[200,77]],"reuse":null,"door":null,"hold":null,"next":null}],"boss":{"at":[200,77]}},"r5":{"name":"驚駭森靈之巢","zones":[{"name":"巢穴入口","boss":false,"seeds":[[298,327]],"reuse":null,"door":{"warps":["R3>R1","R1>R3"]},"hold":null,"next":[245,210]},{"name":"蛋室","boss":false,"seeds":[[268,132]],"reuse":null,"door":{"warps":["R1>R2","R2>R1"]},"hold":null,"next":[130,263]},{"name":"暗黑巢道","boss":false,"seeds":[[123,108]],"reuse":null,"door":{"warps":["R2>R0","R0>R2"]},"hold":null,"next":[85,159]},{"name":"王房","boss":true,"seeds":[[132,66]],"reuse":null,"door":null,"hold":null,"next":null}],"boss":{"at":[132,66]}},"r6":{"name":"舊格拉斯特海姆","zones":[{"name":"騎士團大廳","boss":false,"seeds":[[200,58]],"reuse":null,"door":{"warps":["R0>R3","R3>R0"]},"hold":null,"next":[43,128]},{"name":"迴廊","boss":false,"seeds":[[40,136]],"reuse":null,"door":{"warps":["R3>R4","R4>R3"]},"hold":null,"next":[74,130]},{"name":"地下牢","boss":false,"seeds":[[109,118]],"reuse":null,"door":{"warps":["R4>R2","R2>R4"]},"hold":null,"next":[143,177]},{"name":"王房","boss":true,"seeds":[[149,235]],"reuse":null,"door":null,"hold":null,"next":null}],"boss":{"at":[149,235]}},"r7":{"name":"死者之國","zones":[{"name":"亡者之街","boss":false,"seeds":[[195,252]],"reuse":null,"door":{"cells":[[124,166,145,167],[125,167,147,169],[155,178,170,179],[153,179,165,180],[166,179,170,180],[153,180,170,181],[232,180,251,181],[233,181,251,182],[233,182,252,183]]},"hold":null,"next":[232,174]},{"name":"枯樹廣場","boss":false,"seeds":[[197,129]],"reuse":null,"door":{"cells":[[227,85,235,86],[226,86,235,87],[178,87,186,89],[192,88,198,89],[178,89,187,90],[190,89,197,91],[204,90,213,91],[214,90,216,91],[205,91,216,92],[204,92,217,93],[130,95,147,97],[167,95,168,96],[167,96,170,97],[129,97,148,98],[152,97,170,98],[153,98,165,99],[166,98,170,99],[153,99,170,100],[73,109,79,111],[81,110,91,112],[73,111,80,112]]},"hold":null,"next":[160,91]},{"name":"北方墓地","boss":false,"seeds":[[211,34]],"reuse":null,"door":{"cells":[[231,27,232,28],[233,27,234,28],[231,28,234,34],[231,34,232,35],[233,34,234,35]]},"hold":null,"next":[239,28]},{"name":"冥界廣場","boss":true,"seeds":[[297,55]],"reuse":null,"door":null,"hold":null,"next":null}],"boss":{"at":[297,55]}},"r8":{"name":"封印神殿","zones":[{"name":"墓穴入口","boss":false,"seeds":[[266,113]],"reuse":null,"door":{"cells":[[207,149,218,151],[206,151,218,152]]},"hold":null,"next":[206,155]},{"name":"使徒迴廊","boss":false,"seeds":[[227,198]],"reuse":null,"door":{"cells":[[185,195,186,196],[185,196,188,200],[185,200,186,201]]},"hold":null,"next":[183,195]},{"name":"封印之間","boss":false,"seeds":[[82,177]],"reuse":null,"door":{"cells":[[82,119,90,120],[83,120,89,122]]},"hold":{"at":[[201,229],[68,110],[68,229],[145,124]],"r":4,"secs":30,"frac":0,"min":2},"next":[83,115]},{"name":"蠅巢之間","boss":false,"seeds":[[101,43]],"reuse":null,"door":{"cells":[[164,62,176,63],[164,63,169,64],[171,63,176,64],[164,64,176,65],[154,68,158,70],[153,70,159,71],[115,82,116,83],[117,82,118,83],[115,83,118,92],[123,108,124,109],[121,109,124,119],[123,119,124,120]]},"hold":null,"next":[167,68]},{"name":"王房","boss":true,"seeds":[[175,119],[248,43]],"reuse":null,"door":null,"hold":null,"next":null}],"boss":{"at":[175,119]}}});
   document.addEventListener("ro-helper-read-raid",()=>{
     try{document.documentElement.dataset.roHelperRaidActive=window.RO_RAID?.inRaid?.()?"on":"off";}catch{document.documentElement.dataset.roHelperRaidActive="off";}
   });
@@ -3215,7 +3432,7 @@ function maintainNativeMemory(game,root,now=Date.now()) {
     }
     readHazards(z);
     if (!direction) return;
-    try { (() => { const root = document.documentElement; if (!z?.player || performance.now() - Number(root.dataset.roHelperLast || 0) < 100) return false; const {x,y} = z.player; const partyLeader = readPartyLeader(z, performance.now()); const cleanup = victoryCleanup(z,root.dataset,Date.now(),victoryEmptySince,location.hostname !== "ro.hans-webgametw.com"); watchLocalPickups(z,root.dataset,pickupWatch); const finalBoss = activeFinalBoss(z); const gearWaypoint = !finalBoss && root.dataset.roHelperTimedMagnet!=='on' && root.dataset.roHelperStationaryMagnet!=='on' && readGearWaypoint(z,cleanup || root.dataset.roHelperBossCleanup==='on',gearPaths,performance.now()); const prioritizeMagnet = root.dataset.roHelperPriorityMagnet==='on'; const magnetCleanup = cleanup || root.dataset.roHelperBossCleanup==='on'; const magnetWaypoint = !finalBoss && (prioritizeMagnet || (magnetCleanup && z.pickups.some(e=>!e.dead&&(e.kind==='loot'||e.kind==='card')))) ? readGearWaypoint(z,Boolean(magnetCleanup),magnetPaths,performance.now(),true) : null; const waypoint = (prioritizeMagnet && magnetWaypoint) || gearWaypoint || magnetWaypoint; const reach = waypoint ? Math.max(24,Math.min(60,Math.hypot(waypoint.x-x,waypoint.y-y))) : 60; const routes = [[1,0],[0,1],[-1,0],[0,-1],[1,-1],[1,1],[-1,1],[-1,-1]].map(([dx,dy]) => { const length=Math.hypot(dx,dy); const [vx,vy]=direction(dx/length,dy/length); const clearAt = length => [.2,.4,.6,.8,1].every(fraction=>{const step=length*fraction;const tx=x+vx*step,ty=y+vy*step;return tx>=z.bounds.x0&&tx<=z.bounds.x1&&ty>=z.bounds.y0&&ty<=z.bounds.y1&&(!z.walk||z.walk.walkable(tx,ty))});const distance = [reach,reach/2,reach/4].find(clearAt) || reach; return [x+vx*distance,y+vy*distance,clearAt(distance)] }); const nearby=e=>!e.dead&&Math.hypot(e.x-x,e.y-y)<520; root.dataset.roHelperLive=JSON.stringify({at:Date.now(),battleSeconds:z.time,stageId:z.stageId,lap:Number(z.difficulty?.lap)||1,baseLevel:z.charExp?.level,expeditionFlags:{story:Boolean(z.story),endless:Boolean(z.endless)},runBaseExp:z.endless ? null : z.charExp?.base,bossFarm:{intruderId:z.script?.intruder?.id||null,gear:root.dataset.roHelperBossCleanup==='on'?z.pickups.filter(e=>!e.dead&&(e.kind==='loot'||e.kind==='card')).map(e=>[e.kind,e.x,e.y]):null,solo:!z.coop&&!z.story&&!z.endless,playing:z.state==='playing',bosses:(z.bosses||[]).filter(e=>e.def?.boss).map(e=>[e.def.id,e.def.name]),kills:Object.fromEntries([...new Set([...(z.script?.bosses||[]).map(e=>e.id),...(z.script?.intruder?.id?[z.script.intruder.id]:[]),...(z.bosses||[]).map(e=>e.def?.id).filter(Boolean)])].map(id=>[id,z.killsBy?.get(id)||0])),maze:z.stageId==='maze'?(z.script?.bosses||[]).map(e=>[e.id,e.t]):[]},skillTargets:Object.fromEntries((z.weapons||[]).flatMap(weapon=>{if(typeof weapon.id!=='string')return [];try{const mod=weapon.mod?.(z);const bonus=(weapon.up?.targets||0)+(mod?.targets||0);const count=weapon.countUnit?.()==='objetivo'&&mod?.count>0?mod.count:bonus>0?1+bonus:weapon.targets?.(z);return Number.isSafeInteger(count)&&count>0?[[weapon.id,count]]:[]}catch{return []}})),discoveryBonus:Number.isFinite(z.stats?.discovery)?z.stats.discovery:null,lootRunId:publishLootSnapshot(z),player:[x,y],raidWaypoint:readRaidWaypoint(z),finalBoss:finalBoss ? [finalBoss.x,finalBoss.y] : null,...partyLeader,cleanup,gearWaypoint,magnetWaypoint,routes,zeny:z.zeny,chestCost:z.chestCost(),hazards:readHazards(z),enemyShots:sampleEnemyShots(z,enemyShotCache),bell:readBell(z),enemies:z.enemies.filter(nearby).map(e=>[e.x,e.y]),drops:z.pickups.filter(e=>!e.dead&&(e.kind==='loot'||e.kind==='card'||e.kind==='magnet'||Math.hypot(e.x-x,e.y-y)<650)).map(e=>[e.kind,e.x,e.y])});root.dataset.roHelperLast=String(performance.now());return false })(); setPhase(""); delete document.documentElement.dataset.roHelperError; } catch (error) {
+    try { (() => { const root = document.documentElement; if (!z?.player || performance.now() - Number(root.dataset.roHelperLast || 0) < 100) return false; const {x,y} = z.player; const raidMechanics=window.__roHelperRaidMechanics?.(z)||null; const partyLeader = readPartyLeader(z, performance.now()); const cleanup = victoryCleanup(z,root.dataset,Date.now(),victoryEmptySince,location.hostname !== "ro.hans-webgametw.com"); watchLocalPickups(z,root.dataset,pickupWatch); const finalBoss = activeFinalBoss(z); const gearWaypoint = !finalBoss && root.dataset.roHelperTimedMagnet!=='on' && root.dataset.roHelperStationaryMagnet!=='on' && readGearWaypoint(z,cleanup || root.dataset.roHelperBossCleanup==='on',gearPaths,performance.now()); const prioritizeMagnet = root.dataset.roHelperPriorityMagnet==='on'; const magnetCleanup = cleanup || root.dataset.roHelperBossCleanup==='on'; const magnetWaypoint = !finalBoss && (prioritizeMagnet || (magnetCleanup && z.pickups.some(e=>!e.dead&&(e.kind==='loot'||e.kind==='card')))) ? readGearWaypoint(z,Boolean(magnetCleanup),magnetPaths,performance.now(),true) : null; const waypoint = (prioritizeMagnet && magnetWaypoint) || gearWaypoint || magnetWaypoint; const reach = waypoint ? Math.max(24,Math.min(60,Math.hypot(waypoint.x-x,waypoint.y-y))) : 60; const routes = [[1,0],[0,1],[-1,0],[0,-1],[1,-1],[1,1],[-1,1],[-1,-1]].map(([dx,dy]) => { const length=Math.hypot(dx,dy); const [vx,vy]=direction(dx/length,dy/length); const clearAt = length => [.2,.4,.6,.8,1].every(fraction=>{const step=length*fraction;const tx=x+vx*step,ty=y+vy*step;return tx>=z.bounds.x0&&tx<=z.bounds.x1&&ty>=z.bounds.y0&&ty<=z.bounds.y1&&(!z.walk||z.walk.walkable(tx,ty))});const distance = [reach,reach/2,reach/4].find(clearAt) || reach; return [x+vx*distance,y+vy*distance,clearAt(distance)] }); const nearby=e=>!e.dead&&Math.hypot(e.x-x,e.y-y)<520; root.dataset.roHelperLive=JSON.stringify({at:Date.now(),battleSeconds:z.time,stageId:z.stageId,lap:Number(z.difficulty?.lap)||1,baseLevel:z.charExp?.level,expeditionFlags:{story:Boolean(z.story),endless:Boolean(z.endless)},runBaseExp:z.endless ? null : z.charExp?.base,bossFarm:{intruderId:z.script?.intruder?.id||null,gear:root.dataset.roHelperBossCleanup==='on'?z.pickups.filter(e=>!e.dead&&(e.kind==='loot'||e.kind==='card')).map(e=>[e.kind,e.x,e.y]):null,solo:!z.coop&&!z.story&&!z.endless,playing:z.state==='playing',bosses:(z.bosses||[]).filter(e=>e.def?.boss).map(e=>[e.def.id,e.def.name]),kills:Object.fromEntries([...new Set([...(z.script?.bosses||[]).map(e=>e.id),...(z.script?.intruder?.id?[z.script.intruder.id]:[]),...(z.bosses||[]).map(e=>e.def?.id).filter(Boolean)])].map(id=>[id,z.killsBy?.get(id)||0])),maze:z.stageId==='maze'?(z.script?.bosses||[]).map(e=>[e.id,e.t]):[]},skillTargets:Object.fromEntries((z.weapons||[]).flatMap(weapon=>{if(typeof weapon.id!=='string')return [];try{const mod=weapon.mod?.(z);const bonus=(weapon.up?.targets||0)+(mod?.targets||0);const count=weapon.countUnit?.()==='objetivo'&&mod?.count>0?mod.count:bonus>0?1+bonus:weapon.targets?.(z);return Number.isSafeInteger(count)&&count>0?[[weapon.id,count]]:[]}catch{return []}})),discoveryBonus:Number.isFinite(z.stats?.discovery)?z.stats.discovery:null,lootRunId:publishLootSnapshot(z),player:[x,y],raidMechanics,raidWaypoint:raidMechanics?.enabled?raidMechanics.waypoint:readRaidWaypoint(z),finalBoss:finalBoss ? [finalBoss.x,finalBoss.y] : null,...partyLeader,cleanup,gearWaypoint,magnetWaypoint,routes,zeny:z.zeny,chestCost:z.chestCost(),hazards:readHazards(z),enemyShots:sampleEnemyShots(z,enemyShotCache),bell:readBell(z),enemies:z.enemies.filter(nearby).map(e=>[e.x,e.y]),drops:z.pickups.filter(e=>!e.dead&&(e.kind==='loot'||e.kind==='card'||e.kind==='magnet'||Math.hypot(e.x-x,e.y-y)<650)).map(e=>[e.kind,e.x,e.y])});root.dataset.roHelperLast=String(performance.now());return false })(); setPhase(""); delete document.documentElement.dataset.roHelperError; } catch (error) {
       document.documentElement.dataset.roHelperError = error.message;
     }
   },100);
@@ -4202,7 +4419,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V83.0 網頁控制特別版";
+  const versionName = "Gear V84.0 網頁控制特別版";
   let runtimeInvalidated = false;
   const button = document.createElement("button");
   button.type = "button";
@@ -4210,6 +4427,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
   compactToggle.type = "button";
   const updateAssistantButton = running => {
     document.documentElement.dataset.roHelperMemoryFarming=running?"on":"off";
+    document.documentElement.dataset.roHelperRaidMechanics=running && document.documentElement.dataset.roHelperRaidMechanicsWanted==="on"?"on":"off";
     compactToggle.textContent = running ? "停止" : "啟動";
     compactToggle.setAttribute("aria-label",running ? "停止助手" : "啟動助手");
     button.textContent = "RO 練等助手 " + versionName + " · " + (running ? "啟動中" : "已關閉");
@@ -4344,10 +4562,13 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
   for(const [id,name] of [["r1","獸人的記憶"],["r2","章魚洞穴"],["r3","恐怖玩具工廠"],["r4","尼德霍格之巢"],["r5","驚駭森靈之巢"],["r6","舊格拉斯特海姆"],["r7","死者之國"],["r8","封印神殿"]])raidMode.append(new Option("副本："+name,id));
   const raidRoll=document.createElement("select");raidRoll.setAttribute("aria-label","副本掉落擲骰");
   for(const [id,name] of [["","手動擲骰"],["need","需要"],["greed","貪婪"],["pass","放棄"]])raidRoll.append(new Option("副本擲骰："+name,id));
+  const raidMechanicsToggle=document.createElement("input");raidMechanicsToggle.type="checkbox";
+  const raidMechanicsRow=document.createElement("label");raidMechanicsRow.append(raidMechanicsToggle," 自動處理副本機制");raidMechanicsRow.style.display="block";
+  raidMechanicsToggle.onchange=()=>{writeSetting("ro-helper-raid-mechanics",raidMechanicsToggle.checked?"on":"off");refreshRaidSettings();};
   const raidHelp=document.createElement("small");raidHelp.textContent="回城後快速加入、準備；隊長符合條件時倒數出發。每副本每日一次，失敗也計次。";
-  raidHelp.style.display="block";raidControls.append(raidMode,raidRoll,raidHelp);
-  const refreshRaidSettings=()=>{raidMode.value=readSetting("ro-helper-raid-mode")||"off";if(!raidMode.value)raidMode.value="off";raidRoll.value=readSetting("ro-helper-raid-roll")||"";};
-  raidMode.onchange=()=>{writeSetting("ro-helper-raid-mode",raidMode.value);raidNextAction=0;status.textContent=raidMode.value==="off"?"已關閉自動副本；已加入的團或配對請在遊戲中取消":"副本遠征已設定，回城後自動配對";};
+  raidHelp.style.display="block";raidControls.append(raidMode,raidRoll,raidMechanicsRow,raidHelp);
+  const refreshRaidSettings=()=>{raidMode.value=readSetting("ro-helper-raid-mode")||"off";if(!raidMode.value)raidMode.value="off";raidRoll.value=readSetting("ro-helper-raid-roll")||"";raidMechanicsToggle.checked=readSetting("ro-helper-raid-mechanics")!=="off";const enabled=raidMode.value!=="off"&&raidMechanicsToggle.checked;document.documentElement.dataset.roHelperRaidMechanicsWanted=enabled?"on":"off";document.documentElement.dataset.roHelperRaidMechanics=enabled&&button.getAttribute("aria-pressed")==="true"?"on":"off";};
+  raidMode.onchange=()=>{writeSetting("ro-helper-raid-mode",raidMode.value);raidNextAction=0;status.textContent=raidMode.value==="off"?"已關閉自動副本；已加入的團或配對請在遊戲中取消":"副本遠征已設定，回城後自動配對";refreshRaidSettings();};
   raidRoll.onchange=()=>writeSetting("ro-helper-raid-roll",raidRoll.value);refreshRaidSettings();
   let raidNextAction=0,raidResultSince=0;
   function raidActive(){return document.documentElement.dataset.roHelperRaidActive==="on";}
@@ -4376,6 +4597,8 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
       raidResultSince=0;return false;
     }
     raidResultSince=0;
+    const raidReturn=document.getElementById("rd-back");
+    if(shown(raidReturn)){click(raidReturn);status.textContent="副本｜返回尚在進行的副本";return true;}
     if(document.getElementById("rg-count")){status.textContent="副本：等待倒數出發";return true;}
     const chip=document.getElementById("rg-chip");
     if(shown(chip)){
@@ -4474,7 +4697,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
     "upgrade","character-growth","chest-discovery-threshold","chest-mode","collision-mode","difficulty","difficulty-solo","difficulty-party","difficulty-objective",
     "expedition-lap","expedition-speed","focus-skill","focus-treasure","focus-treasure-2","force-gear","inventory","inventory-tiers","login-character",
     "magnet-minutes","no-flip-level","panel","party-role","pickup-mode","roll-choice","skills","stage","stage-mode","stage-repeats","stage-rotation",
-    "gear-movement","gs-boss-cards","treasures","seen-stages","target-pickup","target-storage","treasure-category-priority","treasure-mode","treasure-priority","world-boss","world-boss-mode","world-boss-lead","raid-mode","raid-roll",
+    "gear-movement","gs-boss-cards","treasures","seen-stages","target-pickup","target-storage","treasure-category-priority","treasure-mode","treasure-priority","world-boss","world-boss-mode","world-boss-lead","raid-mode","raid-roll","raid-mechanics",
     "skill-level-plan","arrow-extra1","arrow-extra2","arrow-extra3","arrow-mode","arrow-starter","arrow-starter2","arrow-starter3","arrow-preference"
   ].map(key=>"ro-helper-"+key));
   portableSettingKeys.add("ro-helper-recycle-cards");
@@ -8951,6 +9174,55 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
       return true;
     };
   };
+function raidHazardClearance(zones,x,y) {
+  let result=Infinity;
+  for(const [kind,cx,cy,w,h,angle=0,inner=0] of zones){
+    if(![cx,cy,w,h,angle,inner].every(Number.isFinite)||w<=0||h<=0)continue;
+    const dx=x-cx,dy=y-cy,d=Math.hypot(dx,dy),r=w/2;let gap=d-r;
+    if(kind==='rect'){const u=Math.abs(dx*Math.cos(angle)+dy*Math.sin(angle)),v=Math.abs(-dx*Math.sin(angle)+dy*Math.cos(angle));gap=Math.max(u-w/2,v-h/2);}
+    else if(kind==='ring')gap=Math.max(d-r,r*inner-d);
+    else if(kind==='cone'){
+      const half=Math.max(0,Math.min(Math.PI,inner)),delta=Math.atan2(Math.sin(Math.atan2(dy,dx)-angle),Math.cos(Math.atan2(dy,dx)-angle));
+      const segment=a=>{const u=Math.cos(a),v=Math.sin(a),t=Math.max(0,Math.min(r,dx*u+dy*v));return Math.hypot(dx-u*t,dy-v*t);};
+      const edge=Math.min(segment(angle-half),segment(angle+half),Math.abs(delta)<=half?Math.abs(d-r):Infinity);
+      gap=d<=r&&Math.abs(delta)<=half?-edge:edge;
+    }
+    result=Math.min(result,gap-16);
+  }
+  return result;
+}
+function chooseRaidMechanicRoute(packet,now=Date.now()) {
+  const m=packet.raidMechanics;
+  if(!m?.enabled)return null;
+  if(!m.ready || !Array.isArray(packet.player)||!Array.isArray(packet.routes))return {direction:-1,label:m.label||'副本｜等待機制資料'};
+  const same=(a,b)=>a[0]===b[0]&&a.slice(1,7).every((v,i)=>Math.abs(v-b[i+1])<.1);
+  const neutral=m.neutral||[],danger=m.hazards||[];
+  // A friendly marker can share coordinates with a real attack. Keep the attack in that case.
+  const zones=[...(packet.hazards||[]).filter(a=>!neutral.some(b=>same(a,b))||danger.some(b=>same(a,b))),...danger];
+  const [px,py]=packet.player,age=Math.max(0,Math.min(.3,(now-packet.at)/1000));
+  const clearance=(x,y)=>Math.min(raidHazardClearance(zones,x,y),shotClearance(packet.enemyShots||[],packet.player,[x,y],age)-37,(packet.enemies||[]).reduce((v,[ex,ey])=>Math.min(v,Math.hypot(x-ex,y-ey)-38),Infinity));
+  const origin=clearance(px,py),separation=(x,y)=>(m.players||[]).reduce((d,[a,b])=>Math.min(d,Math.hypot(x-a,y-b)),Infinity);
+  if(m.stay&&origin>0&&(!m.marked||separation(px,py)>m.markRadius+35))return {direction:-1,label:m.label};
+  const goal=m.waypoint||m.target;
+  const candidates=packet.routes.map(([x,y,walkable],direction)=>{
+    if(!walkable||![x,y].every(Number.isFinite))return null;
+    const end=clearance(x,y),path=Math.min(...[.2,.4,.6,.8,1].map(f=>raidHazardClearance(zones,px+(x-px)*f,py+(y-py)*f)));
+    const distance=goal?Math.hypot(x-goal[0],y-goal[1]):0,sep=separation(x,y);
+    const monster=(packet.enemies||[]).reduce((v,[ex,ey])=>Math.min(v,Math.hypot(x-ex,y-ey)),Infinity);
+    return {direction,end,path,distance,sep,monster};
+  }).filter(Boolean);
+  if(!candidates.length)return {direction:-1,label:m.label+'（無可通行方向）'};
+  const safe=candidates.filter(c=>c.end>0&&(origin<=0||c.path>0));
+  const pool=safe.length?safe:candidates;
+  pool.sort((a,b)=>{
+    if(!safe.length)return b.end-a.end||b.sep-a.sep;
+    if(m.marked&&m.kind!=='bell'&&m.kind!=='curse'&&Math.min(a.sep,b.sep)<m.markRadius+40)return b.sep-a.sep||a.distance-b.distance;
+    if(origin<=0 && !goal)return b.end-a.end;
+    return a.distance-b.distance||Math.min(100,b.monster)-Math.min(100,a.monster)||b.end-a.end;
+  });
+  return {direction:pool[0].direction,label:origin<=0?m.label+'｜閃避危險':m.label};
+}
+
   function shotClearance(shots, [px,py], [x,y], age) {
     const dx = x-px, dy = y-py;
     const travelTime = Math.max(0.04,Math.hypot(dx,dy)/240);
@@ -10339,6 +10611,13 @@ return;
   delete document.documentElement.dataset.roHelperFinishVictory;
   next = result;
 }else if(stage){if(!stage.classList.contains("sel")){next=stage}else if(go&&!departing){next=go;departing=true;departureDifficultyContext={stage:baseExpeditionName(stageNameOf(stage)),lap:Number(highestLap||expeditionLap.value),account:activeAccount};if(taiwanGame) hansHighDifficultyUntil=Date.now()+30000;rotationRun=stageMode.value==="rotation"?{stage:stageName}:undefined}}else if(stageCards.length&&stageName){release();status.textContent=stageName===highestStageMode?"目前沒有可出發的一般關卡":"指定關卡目前無法出發："+stageName;return}else if(!go&&!field){departing=false;if(captain)next=captain}if(!next){if(last?.id!=="stg-go")last=undefined;const view=document.body.innerText;const battle=!visiblePicker&&!picking&&!result&&!go&&!field&&!captain&&inBattle&&!document.querySelector("#pause:not(.hidden),#npc-dialog:not(.hidden),dialog[open]")&&!document.activeElement?.matches("input,textarea,select,[contenteditable=true]");release();if(battle){const packet=readLivePacket();const stationaryMagnetOnly=!autoMove;const manualMagnetDue=updateTimedMagnet(packet,true);const manualMagnetPlan=manualMagnetAction(packet,manualMagnetDue,magnetSchedule.cleanupCollected,document.documentElement.dataset.roHelperBossCleanup==="on");if(stationaryMagnetOnly&&manualMagnetPlan==="idle"){blocked.clear();previousPosition=null;previousDirection=null;escapeDirection=-1;escapeUntil=0;status.textContent=gearPickupToggle.value==="timed"?(manualMagnetDue?"原地待命：等待可撿取的磁鐵":"原地待命：等待磁鐵間隔"):"手動移動";return}const fresh=packet&&Date.now()-packet.at>=0&&Date.now()-packet.at<750&&packet.routes?.length===route.length;if(!fresh){if(!retriedCoordinates&&!coordinateRequest&&(!coordinateConnectedAt||Date.now()-coordinateConnectedAt>3000)){retriedCoordinates=true;void connectCoordinates(false,true)}blocked.clear();previousPosition=null;previousDirection=null;escapeDirection=-1;escapeUntil=0;release();status.textContent=document.documentElement.dataset.roHelperError||document.documentElement.dataset.roHelperPhase|| (coordinateConnectedAt&&Date.now()-coordinateConnectedAt>3000?"戰鬥中未收到即時座標，走位已暫停":coordinateStatus);return}retriedCoordinates=false;
+if(autoMove && raidActive() && packet.raidMechanics?.enabled){
+  const decision=chooseRaidMechanicRoute(packet);
+  if(decision){status.textContent=decision.label;previousDirection=null;escapeDirection=-1;escapeUntil=0;
+    if(decision.direction>=0){held=route[decision.direction];for(const key of held)send("keydown",key);clearTimeout(movePulse);movePulse=setTimeout(release,120);}
+    return;
+  }
+}
 const collectionWaypoint = stationaryMagnetOnly && manualMagnetPlan==="cleanup" && magnetSchedule.cleanupCollected ? null : packet.magnetWaypoint;
 if(stationaryMagnetOnly && manualMagnetPlan==="cleanup"){
   const pending = document.documentElement.dataset.roHelperBossCleanup==="on" ? packet.bossFarm?.gear : packet.cleanup?.gear;
