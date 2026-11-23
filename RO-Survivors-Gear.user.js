@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 86.0
+// @version 87.0
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -4426,7 +4426,11 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V86.0 網頁控制特別版";
+  const versionName = "Gear V87.0 網頁控制特別版";
+  let automationMode="normal";
+  const raidCompletion={entered:false,finished:false};
+  const compactRaidToggle=document.createElement("button");compactRaidToggle.type="button";
+  const raidStartButton=document.createElement("button");raidStartButton.type="button";
   let runtimeInvalidated = false;
   const button = document.createElement("button");
   button.type = "button";
@@ -4434,11 +4438,15 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
   compactToggle.type = "button";
   const updateAssistantButton = running => {
     document.documentElement.dataset.roHelperMemoryFarming=running?"on":"off";
-    document.documentElement.dataset.roHelperRaidMechanics=running && document.documentElement.dataset.roHelperRaidMechanicsWanted==="on"?"on":"off";
-    compactToggle.textContent = running ? "停止" : "啟動";
-    compactToggle.setAttribute("aria-label",running ? "停止助手" : "啟動助手");
-    button.textContent = "RO 練等助手 " + versionName + " · " + (running ? "啟動中" : "已關閉");
-    button.setAttribute("aria-pressed", String(running));
+    document.documentElement.dataset.roHelperRaidMechanics=running && automationMode==="raid" && document.documentElement.dataset.roHelperRaidMechanicsWanted==="on"?"on":"off";
+    compactToggle.textContent = running && automationMode==="normal" ? "停止" : "啟動";
+    compactRaidToggle.textContent=running && automationMode==="raid"?"停征":"遠征";
+    compactRaidToggle.setAttribute("aria-pressed",String(running&&automationMode==="raid"));
+    compactRaidToggle.title=running&&automationMode==="raid"?"停止副本遠征掛機":"啟動副本遠征掛機";
+    raidStartButton.textContent=running&&automationMode==="raid"?"停止遠征掛機":"開始遠征掛機";
+    compactToggle.setAttribute("aria-label",running && automationMode==="normal" ? "停止助手" : "啟動助手");
+    button.textContent = "RO 練等助手 " + versionName + " · 普通掛機 " + (running && automationMode==="normal" ? "啟動中" : "已關閉");
+    button.setAttribute("aria-pressed", String(running&&automationMode==="normal"));
   };
   updateAssistantButton(false);
   button.style.cssText = "position:fixed;top:92px;right:12px;z-index:2147483647;pointer-events:auto;background:#234b96;color:white;padding:10px;border-radius:8px";
@@ -4585,6 +4593,12 @@ function raidPresetGroupReadiness(preset,group,me) {
   return {ready:true,reason:'固定隊友已到齊並準備，倒數出發',missing};
 }
 
+function raidCompletionTransition(state,active,ended) {
+  if(active){state.entered=true;if(ended)state.finished=true;return false;}
+  if(!state.entered)return false;
+  const completed=state.finished;state.entered=false;state.finished=false;return completed;
+}
+
   const raidControls=document.createElement("div");
   const raidMode=document.createElement("select");raidMode.setAttribute("aria-label","副本遠征");
   raidMode.append(new Option("副本遠征：關","off"),new Option("副本：我能打的都可以","any"));
@@ -4627,17 +4641,46 @@ function raidPresetGroupReadiness(preset,group,me) {
   const raidMechanicsToggle=document.createElement("input");raidMechanicsToggle.type="checkbox";
   const raidMechanicsRow=document.createElement("label");raidMechanicsRow.append(raidMechanicsToggle," 自動處理副本機制");raidMechanicsRow.style.display="block";
   raidMechanicsToggle.onchange=()=>{writeSetting("ro-helper-raid-mechanics",raidMechanicsToggle.checked?"on":"off");refreshRaidSettings();};
+  const raidReturnNormal=document.createElement("input");raidReturnNormal.type="checkbox";
+  const raidReturnNormalRow=document.createElement("label");raidReturnNormalRow.style.display="block";raidReturnNormalRow.append(raidReturnNormal," 本次副本結束後開啟普通掛機");
+  raidReturnNormalRow.title="完成一場副本並返回後切換普通掛機；未勾選時維持遠征模式。";
+  raidReturnNormal.onchange=()=>writeSetting("ro-helper-raid-return-normal",raidReturnNormal.checked?"on":"off");
+  raidStartButton.onclick=()=>toggleAutomationMode("raid");
   const raidHelp=document.createElement("small");raidHelp.textContent="回城後快速加入、準備；隊長符合條件時倒數出發。每副本每日一次，失敗也計次。";
-  raidHelp.style.display="block";raidControls.append(raidMode,raidRoll,raidPresetBox,raidMechanicsRow,raidHelp);
-  const refreshRaidSettings=()=>{loadRaidPreset();raidMode.value=readSetting("ro-helper-raid-mode")||"off";if(!raidMode.value)raidMode.value="off";raidRoll.value=readSetting("ro-helper-raid-roll")||"";raidMechanicsToggle.checked=readSetting("ro-helper-raid-mechanics")!=="off";const enabled=raidMode.value!=="off"&&raidMechanicsToggle.checked;document.documentElement.dataset.roHelperRaidMechanicsWanted=enabled?"on":"off";document.documentElement.dataset.roHelperRaidMechanics=enabled&&button.getAttribute("aria-pressed")==="true"?"on":"off";};
+  raidHelp.style.display="block";raidControls.append(raidStartButton,raidMode,raidRoll,raidPresetBox,raidMechanicsRow,raidReturnNormalRow,raidHelp);
+  const refreshRaidSettings=()=>{loadRaidPreset();raidReturnNormal.checked=readSetting("ro-helper-raid-return-normal")==="on";raidMode.value=readSetting("ro-helper-raid-mode")||"off";if(!raidMode.value)raidMode.value="off";raidRoll.value=readSetting("ro-helper-raid-roll")||"";raidMechanicsToggle.checked=readSetting("ro-helper-raid-mechanics")!=="off";const enabled=raidMode.value!=="off"&&raidMechanicsToggle.checked;document.documentElement.dataset.roHelperRaidMechanicsWanted=enabled?"on":"off";document.documentElement.dataset.roHelperRaidMechanics=enabled&&automationMode==="raid"&&Boolean(window.__roMenuHelper)?"on":"off";};
   raidMode.onchange=()=>{writeSetting("ro-helper-raid-mode",raidMode.value);raidNextAction=0;status.textContent=raidMode.value==="off"?"已關閉自動副本；已加入的團或配對請在遊戲中取消":"副本遠征已設定，回城後自動配對";refreshRaidSettings();};
   raidRoll.onchange=()=>writeSetting("ro-helper-raid-roll",raidRoll.value);refreshRaidSettings();
-  let raidNextAction=0,raidResultSince=0;
+  let raidNextAction=0,raidResultSince=0,raidWaiting=false,raidWaitingText="",raidWaitingGroupId=null,raidGroupPanelOwned=false,raidFoldedGroup=null;
+function raidGroupPanelAction(snapshot,preset,now) {
+  const group=snapshot?.group;if(!group)return null;
+  const me=(group.members||[]).find(m=>m.aid===snapshot.me);
+  if(!me)return 'state';
+  if(!me.ready)return 'ready';
+  if(group.leader!==snapshot.me)return null;
+  if(preset.role==='member')return null;
+  const plan=preset.role==='leader'?preset:{role:'leader',names:[],fill:false};
+  const readiness=raidPresetGroupReadiness(plan,group,snapshot.me);
+  if(preset.role==='leader'){
+    if(readiness.missing.some(n=>now-(raidPresetInvited.get(n)??-Infinity)>=30000))return 'invite';
+    if(!readiness.missing.length&&preset.fill&&!group.open)return 'public';
+  }
+  return readiness.ready?'start':null;
+}
+
   function raidActive(){return document.documentElement.dataset.roHelperRaidActive==="on";}
   function readRaidState(){document.dispatchEvent(new Event("ro-helper-read-raid"));return raidActive();}
   function handleRaidExpedition(){
+    raidWaiting=false;raidWaitingText="";
     if(!taiwanGame)return false;
-    const active=readRaidState(),enabled=raidMode.value!=="off",now=Date.now();
+    const active=readRaidState(),now=Date.now();
+    if(automationMode==="raid"){
+      const ended=active&&Boolean(document.getElementById("rd-leave")||document.getElementById("rfx-back"));
+      if(raidCompletionTransition(raidCompletion,active,ended)&&raidReturnNormal.checked){
+        automationMode="normal";updateAssistantButton(true);rememberRefresh();status.textContent="本次副本已結束，切換普通掛機";
+      }
+    }
+    const enabled=automationMode==="raid"&&raidMode.value!=="off";
     if(!enabled)return false;
     const shown=el=>!!el && !el.hidden && !el.closest(".hidden") && el.style.display!=="none";
     const click=el=>{if(!shown(el)||el.disabled||now<raidNextAction)return false;raidNextAction=now+1200;el.click();return true;};
@@ -4674,8 +4717,27 @@ function raidPresetGroupReadiness(preset,group,me) {
     if(document.getElementById("rg-count")){status.textContent="副本：等待倒數出發";return true;}
     const chip=document.getElementById("rg-chip");
     if(shown(chip)){
-      const open=document.getElementById("rg-chip-open");if(open && !document.getElementById("rg-win"))click(open);
-      const ready=document.getElementById("rg-w-ready");if(ready && ready.textContent.trim()==="準備好了")click(ready);
+      const group=snapshot?.group;
+      if(group){
+        if(raidWaitingGroupId!==group.gid){raidWaitingGroupId=group.gid;raidGroupPanelOwned=false;raidFoldedGroup=null;}
+        const action=raidGroupPanelAction(snapshot,preset,now);
+        const panel=document.getElementById('rg-win');
+        if(!action){
+          if(panel&&(raidGroupPanelOwned||raidFoldedGroup!==group.gid)){
+            if(!click(document.getElementById('rg-w-close'))){status.textContent='副本｜準備完成，收起等待視窗';return true;}
+            raidFoldedGroup=group.gid;raidGroupPanelOwned=false;
+          }
+          raidWaiting=true;
+          raidWaitingText='副本｜已準備，等待團隊出發（可整理裝備）';
+          status.textContent=raidWaitingText;return false;
+        }
+        if(action==='state'){status.textContent='副本｜等待團員狀態更新';return true;}
+        if(!panel){if(click(document.getElementById('rg-chip-open')))raidGroupPanelOwned=true;status.textContent='副本｜更新準備／團隊安排';return true;}
+      }else if(snapshot?.pool&&preset.role==='off'){
+        raidWaiting=true;raidWaitingText='副本｜配對等待中（可整理裝備）';status.textContent=raidWaitingText;return false;
+      }
+      const open=document.getElementById("rg-chip-open");if(open && !document.getElementById("rg-win")){if(click(open))raidGroupPanelOwned=true;return true;}
+      const ready=document.getElementById("rg-w-ready");if(ready && ready.textContent.trim()==="準備好了"){if(click(ready))raidGroupPanelOwned=true;status.textContent='副本｜正在準備';return true;}
       if(preset.role!=="off")return handleRaidPresetGroup(snapshot,preset,click,now);
       const go=document.getElementById("rg-w-go");if(go && !go.disabled && (!ready || ready.textContent.trim()!=="準備好了") && click(go))raidNextAction=now+10000;
       status.textContent="副本：配對／等待團員與出發條件";return true;
@@ -4782,7 +4844,7 @@ function raidPresetGroupReadiness(preset,group,me) {
     "upgrade","character-growth","chest-discovery-threshold","chest-mode","collision-mode","difficulty","difficulty-solo","difficulty-party","difficulty-objective",
     "expedition-lap","expedition-speed","focus-skill","focus-treasure","focus-treasure-2","force-gear","inventory","inventory-tiers","login-character",
     "goal-action","magnet-minutes","no-flip-level","panel","party-role","pickup-mode","roll-choice","skills","stage","stage-mode","stage-repeats","stage-rotation",
-    "gear-movement","gs-boss-cards","treasures","seen-stages","target-pickup","target-storage","treasure-category-priority","treasure-mode","treasure-priority","world-boss","world-boss-mode","world-boss-lead","raid-mode","raid-roll","raid-mechanics","raid-preset",
+    "gear-movement","gs-boss-cards","treasures","seen-stages","target-pickup","target-storage","treasure-category-priority","treasure-mode","treasure-priority","world-boss","world-boss-mode","world-boss-lead","raid-mode","raid-roll","raid-mechanics","raid-preset","raid-return-normal",
     "skill-level-plan","arrow-extra1","arrow-extra2","arrow-extra3","arrow-mode","arrow-starter","arrow-starter2","arrow-starter3","arrow-preference"
   ].map(key=>"ro-helper-"+key));
   portableSettingKeys.add("ro-helper-recycle-cards");
@@ -10369,7 +10431,16 @@ const timer=setInterval(()=>{try {
   }
   if (settlement) lootBattleActive = false;
   if (handleRaidExpedition()) { release(); return; }
-  if (handleWorldBoss()) { release(); return; }
+  if (raidWaiting && document.body.classList.contains("in-lobby")) {
+    if(!runInventoryCleanup())status.textContent=raidWaitingText;
+    release();return;
+  }
+  if (raidActive() && automationMode!=="raid") {release();status.textContent="副本中，請按遠征啟動副本掛機";return;}
+  if (automationMode==="raid" && !raidActive() && document.body.classList.contains("in-lobby")) {
+    if(!runInventoryCleanup())status.textContent="遠征模式：等待所選副本與隊伍";
+    release();return;
+  }
+  if (automationMode==="normal" && !raidWaiting && handleWorldBoss()) { release(); return; }
   if (!raidActive() && (handleLobbySelection() || runCharacterGrowth() || runInventoryCleanup())) {
     release();
     return;
@@ -10953,7 +11024,19 @@ void connectCoordinates(false);
 })();
     } catch (error) { status.textContent = "載入失敗：" + error.message; }
   };
-  button.addEventListener("click", event => { event.stopPropagation(); toggle(); });
+  function toggleAutomationMode(mode){
+    if(mode==="raid"&&raidMode.value==="off"){
+      preference.collapsed=false;showCollapsed();for(const group of panelGroups)if(group.contains(raidControls))group.open=true;
+      status.textContent="請先選擇要打的副本，再按遠征";return;
+    }
+    const running=Boolean(window.__roMenuHelper);
+    if(running&&automationMode===mode){toggle();return;}
+    automationMode=mode;raidCompletion.entered=false;raidCompletion.finished=false;
+    if(running){updateAssistantButton(true);rememberRefresh();status.textContent=mode==="raid"?"已切換遠征掛機":"已切換普通掛機";}
+    else toggle();
+  }
+  button.addEventListener("click", event => { event.stopPropagation(); toggleAutomationMode("normal"); });
+  compactRaidToggle.addEventListener("click",event=>{event.stopPropagation();toggleAutomationMode("raid");});
   try {
     runtime.onMessage.addListener((message, sender, respond) => {
       if (message?.type === "ro-gs-error") { status.textContent = message.error; return; }
@@ -11132,7 +11215,7 @@ void connectCoordinates(false);
   });
   const compactNotes=document.createElement("button");compactNotes.type="button";compactNotes.textContent="記事";
   compactNotes.onclick=event=>{event.stopPropagation();sessionNotesWindow.hidden=false;refreshSessionNotes();};
-  for (const shortcut of [compactToggle,compactOrganize,compactLoot,compactStage,compactNotes]) {
+  for (const shortcut of [compactToggle,compactRaidToggle,compactOrganize,compactLoot,compactStage,compactNotes]) {
     shortcut.style.cssText = "background:#234b96;color:white;border:1px solid #839bd1;border-radius:4px;padding:2px 5px;cursor:pointer;white-space:nowrap";
   }
   compactLoot.addEventListener("click", event => {
@@ -11200,7 +11283,7 @@ void connectCoordinates(false);
   });
   status.style.cssText = "padding:5px 2px 0;overflow-wrap:anywhere";
   content.append(actions, stageSettings, timerDisplay, status);
-  header.append(compactToggle, compactOrganize, compactLoot, compactStage, compactNotes, collapse);
+  header.append(compactToggle, compactRaidToggle, compactOrganize, compactLoot, compactStage, compactNotes, collapse);
   panel.append(header, content, footer);
   document.body.append(panel, lootWindow);
   skillFocus.refresh();
@@ -11250,7 +11333,7 @@ void connectCoordinates(false);
     actions.style.display = collapsed ? "none" : "flex";
     compactNotes.hidden = !collapsed;
     compactLoot.hidden = !collapsed;
-    compactToggle.hidden = !collapsed;
+    compactToggle.hidden = !collapsed;compactRaidToggle.hidden=!collapsed||!taiwanGame;
     compactStage.hidden = !collapsed;
     compactOrganize.hidden = !collapsed || !taiwanGame;
     stageSettings.hidden = collapsed;
@@ -11314,6 +11397,7 @@ void connectCoordinates(false);
       refreshCheckpointAt = Date.now();
       sessionStorage.setItem(refreshStateKey,JSON.stringify({
         at:refreshCheckpointAt,account:activeAccount,character:name || refreshCharacter,
+        automationMode,raidCompletion:{...raidCompletion},
         characterSlot:Math.max(1,[...document.querySelectorAll("#charselect #slots > .slot")].findIndex(slot=>slot.classList.contains("selected"))+1),
         gpuSaver:document.documentElement.dataset.roHelperGpuSaver === "on"
       }));
@@ -11395,6 +11479,8 @@ void connectCoordinates(false);
         return;
       }
       const restoreGpuSaver = refreshRecovery.gpuSaver === true;
+      automationMode=refreshRecovery.automationMode==="raid"?"raid":"normal";
+      raidCompletion.entered=!!refreshRecovery.raidCompletion?.entered;raidCompletion.finished=!!refreshRecovery.raidCompletion?.finished;
       refreshRecovery = null;
       toggle(true);
       if (window.__roMenuHelper) {
