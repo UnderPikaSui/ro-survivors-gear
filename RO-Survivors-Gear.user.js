@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 87.4
+// @version 88.0
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -4436,7 +4436,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V87.4 網頁控制特別版";
+  const versionName = "Gear V88.0 網頁控制特別版";
   let automationMode="normal";
   const raidCompletion={entered:false,finished:false};
   const compactRaidToggle=document.createElement("button");compactRaidToggle.type="button";
@@ -4676,6 +4676,7 @@ function raidCompletionTransition(state,active,evidence){
   const refreshRaidSettings=()=>{loadRaidPreset();raidReturnNormal.checked=readSetting("ro-helper-raid-return-normal")==="on";raidMode.value=readSetting("ro-helper-raid-mode")||"off";if(!raidMode.value)raidMode.value="off";raidRoll.value=readSetting("ro-helper-raid-roll")||"";raidMechanicsToggle.checked=readSetting("ro-helper-raid-mechanics")!=="off";const enabled=raidMode.value!=="off"&&raidMechanicsToggle.checked;document.documentElement.dataset.roHelperRaidMechanicsWanted=enabled?"on":"off";document.documentElement.dataset.roHelperRaidMechanics=enabled&&automationMode==="raid"&&Boolean(window.__roMenuHelper)?"on":"off";};
   raidMode.onchange=()=>{resetRaidCompletion(raidCompletion);writeSetting("ro-helper-raid-mode",raidMode.value);raidNextAction=0;status.textContent=raidMode.value==="off"?"已關閉自動副本；已加入的團或配對請在遊戲中取消":"副本遠征已設定，回城後自動配對";refreshRaidSettings();};
   raidRoll.onchange=()=>writeSetting("ro-helper-raid-roll",raidRoll.value);refreshRaidSettings();
+  let raidCleanupPending=false;
   let raidNextAction=0,raidResultSince=0,raidWaiting=false,raidWaitingText="",raidWaitingGroupId=null,raidGroupPanelOwned=false,raidFoldedGroup=null;
 function raidGroupPanelAction(snapshot,preset,now) {
   const group=snapshot?.group;if(!group)return null;
@@ -4695,13 +4696,50 @@ function raidGroupPanelAction(snapshot,preset,now) {
 
   function raidActive(){return document.documentElement.dataset.roHelperRaidActive==="on";}
   function readRaidState(){document.dispatchEvent(new Event("ro-helper-read-raid"));return raidActive();}
+
+  function handleRaidPartyPrompt(preset,click){
+    if(preset.role==='off'||!preset.accept||!document.body.classList.contains('in-lobby'))return false;
+    const box=document.querySelector('#npc-dialog:not(.hidden)');if(!box)return false;
+    const title=box.querySelector('#npc-name')?.textContent.trim();if(!['隊伍','Grupo','Party'].includes(title))return false;
+    const text=box.querySelector('#npc-text'),message=text?.textContent.trim()||'',button=box.querySelector('#npc-options button.primary');
+    if(!button)return false;
+    const trusted=name=>preset.names.includes(name);
+    if(/邀請你入隊|邀請你加入|te invita a su grupo/.test(message)){
+      const name=text.querySelector('b')?.textContent.trim();
+      if(trusted(name)&&/^(接受|Aceptar|Accept)$/.test(button.textContent.trim())&&click(button)){status.textContent='副本組隊｜已接受 '+name+' 的組隊邀請';return true;}
+    }
+    if(/隊長在頻道|El líder del grupo está en el canal/.test(message)){
+      const row=[...document.querySelectorAll('.pf-row')].find(row=>row.querySelector('.pf-lead'));
+      const name=row?.querySelector('.pf-name b')?.textContent.trim(),hop=row?.querySelector('button[data-hop]')?.dataset.hop;
+      const channel=button.textContent.match(/(?:移至頻道|Ir al canal)\s*(\d+)/)?.[1];
+      if(trusted(name)&&channel&&String(hop)===channel&&click(button)){status.textContent='副本組隊｜已移動到隊長頻道 '+channel;return true;}
+    }
+    return false;
+  }
+  function handleRaidPostCleanup(){
+    if(!raidCleanupPending||raidActive()||!document.body.classList.contains('in-lobby'))return false;
+    if(document.getElementById('rg-count'))return false;
+    const settings=inventorySettings();
+    if((!settings.store&&!settings.sell&&!targetStorageRules.size)||(!inventoryRules(settings).length&&!targetStorageRules.size)){raidCleanupPending=false;return false;}
+    if(inventoryRun?.raidCleanup&&inventoryRun.done){raidCleanupPending=false;return false;}
+    if(!inventoryRun||inventoryRun.done){
+      if(document.querySelector('.overlay:not(.hidden)')){
+        const close=document.querySelector('#raidshop:not(.hidden) #rs-close');
+        if(close&&!close.disabled){close.click();return true;}return false;
+      }
+      inventoryRun={manual:true,raidCleanup:true,phase:'open',expires:Date.now()+35000,next:0,reject:new Set(),stored:0};
+    }
+    if(runInventoryCleanup())return true;
+    raidCleanupPending=false;return false;
+  }
+
   function handleRaidExpedition(){
     raidWaiting=false;raidWaitingText="";
     if(!taiwanGame)return false;
     const active=readRaidState(),now=Date.now();
     const evidence=readRaidCompletionEvidence(active);
     if(automationMode==="raid"){
-      raidCompletionTransition(raidCompletion,active,evidence);
+      if(raidCompletionTransition(raidCompletion,active,evidence)){raidCleanupPending=true;if(inventoryRun?.done)inventoryRun=undefined;}
     }
     const enabled=automationMode==="raid"&&raidMode.value!=="off";
     if(!enabled)return false;
@@ -4736,6 +4774,7 @@ function raidGroupPanelAction(snapshot,preset,now) {
       return true;
     }
     const preset=raidPreset(),snapshot=readRaidGroupSnapshot();
+    if(handleRaidPartyPrompt(preset,click))return true;
     if(preset.role!=='off'&&!worldBossActive()&&!snapshot?.group){
       const iv=snapshot?.invite,box=document.getElementById('rg-inv');
       const raidName=raidMode.selectedOptions?.[0]?.textContent.replace(/^副本：/,'');
@@ -4745,6 +4784,7 @@ function raidGroupPanelAction(snapshot,preset,now) {
         status.textContent='預先組隊｜等待同意固定名單的邀請';return true;
       }
     }
+    if(handleRaidPostCleanup())return true;
     const raidReturn=document.getElementById("rd-back");
     if(shown(raidReturn)){click(raidReturn);status.textContent="副本｜返回尚在進行的副本";return true;}
     if(document.getElementById("rg-count")){status.textContent="副本：等待倒數出發";return true;}
@@ -11437,7 +11477,7 @@ void connectCoordinates(false);
       refreshCheckpointAt = Date.now();
       sessionStorage.setItem(refreshStateKey,JSON.stringify({
         at:refreshCheckpointAt,account:activeAccount,character:name || refreshCharacter,
-        automationMode,raidCompletion:{...raidCompletion},
+        automationMode,raidCleanupPending,raidCompletion:{...raidCompletion},
         characterSlot:Math.max(1,[...document.querySelectorAll("#charselect #slots > .slot")].findIndex(slot=>slot.classList.contains("selected"))+1),
         gpuSaver:document.documentElement.dataset.roHelperGpuSaver === "on"
       }));
@@ -11520,6 +11560,7 @@ void connectCoordinates(false);
       }
       const restoreGpuSaver = refreshRecovery.gpuSaver === true;
       automationMode=refreshRecovery.automationMode==="raid"?"raid":"normal";
+      raidCleanupPending=refreshRecovery.raidCleanupPending===true;
       raidCompletion.entered=!!refreshRecovery.raidCompletion?.entered;raidCompletion.proof=refreshRecovery.raidCompletion?.proof===true;raidCompletion.finished=raidCompletion.proof&&refreshRecovery.raidCompletion?.finished===true;raidCompletion.result=refreshRecovery.raidCompletion?.result||null;raidCompletion.runId=refreshRecovery.raidCompletion?.runId||null;
       refreshRecovery = null;
       toggle(true);
