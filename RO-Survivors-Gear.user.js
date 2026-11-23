@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 85.2
+// @version 86.0
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -292,6 +292,13 @@ function installRaidMechanics(book) {
   installRaidMechanics({"r1":{"name":"獸人的記憶","zones":[{"name":"海岸村落","boss":false,"seeds":[[122,300]],"reuse":null,"door":{"warps":["Z1>Z2","Z2>Z1"]},"hold":null,"next":[219,252]},{"name":"村莊廣場","boss":false,"seeds":[[213,196]],"reuse":null,"door":{"warps":["Z2>Z3","Z3>Z2"]},"hold":null,"next":[120,233]},{"name":"祭壇前","boss":false,"seeds":[[113,262]],"reuse":null,"door":{"warps":["Z3>Z4","Z4>Z3"]},"hold":{"at":[113,262],"r":5,"secs":40,"frac":0.34},"next":[102,166]},{"name":"王房","boss":true,"seeds":[[155,149]],"reuse":null,"door":null,"hold":null,"next":null}],"boss":{"at":[155,140]}},"r2":{"name":"章魚洞穴","zones":[{"name":"中庭","boss":false,"seeds":[[105,187]],"reuse":null,"door":{"cells":[[116,109,144,110],[116,110,122,111],[123,110,137,111],[138,110,144,111],[116,111,144,112],[186,145,187,146],[186,146,189,153],[190,187,191,188],[190,188,193,192],[122,228,126,229],[134,228,138,229],[123,229,126,231],[134,229,137,231]]},"hold":null,"next":[128,103]},{"name":"四座殿堂","boss":false,"seeds":[[45,81],[213,220]],"reuse":null,"door":null,"hold":null,"next":[129,160]},{"name":"王房","boss":true,"seeds":[[105,187]],"reuse":1,"door":null,"hold":null,"next":null}],"boss":{"at":[129,170]}},"r3":{"name":"恐怖玩具工廠","zones":[{"name":"倉庫","boss":false,"seeds":[[61,197]],"reuse":null,"door":{"warps":["R1>R2","R2>R1"]},"hold":null,"next":[132,186]},{"name":"組裝線","boss":false,"seeds":[[183,219]],"reuse":null,"door":{"warps":["R2>R3","R3>R2"]},"hold":null,"next":[186,127]},{"name":"包裝區","boss":false,"seeds":[[183,111],[221,71]],"reuse":null,"door":{"warps":["R4>R0","R0>R4"]},"hold":null,"next":[159,39]},{"name":"王房","boss":true,"seeds":[[66,16]],"reuse":null,"door":null,"hold":null,"next":null}],"boss":{"at":[66,16]}},"r4":{"name":"尼德霍格之巢","zones":[{"name":"世界樹根","boss":false,"seeds":[[192,381]],"reuse":null,"door":{"cells":[[284,336,290,338],[284,338,291,339],[372,336,378,338],[371,338,378,339],[380,340,386,342]]},"hold":null,"next":[286,333]},{"name":"巢穴迴廊","boss":false,"seeds":[[302,297]],"reuse":null,"door":{"cells":[[236,280,242,282],[108,330,111,336],[110,336,111,337],[14,340,20,342]]},"hold":null,"next":[238,277]},{"name":"淨化祭壇","boss":false,"seeds":[[200,224]],"reuse":null,"door":{"warps":["N3>B","B>N3"]},"hold":{"at":[200,226],"r":6,"secs":45,"frac":0.34},"next":[200,142]},{"name":"王房","boss":true,"seeds":[[200,77]],"reuse":null,"door":null,"hold":null,"next":null}],"boss":{"at":[200,77]}},"r5":{"name":"驚駭森靈之巢","zones":[{"name":"巢穴入口","boss":false,"seeds":[[298,327]],"reuse":null,"door":{"warps":["R3>R1","R1>R3"]},"hold":null,"next":[245,210]},{"name":"蛋室","boss":false,"seeds":[[268,132]],"reuse":null,"door":{"warps":["R1>R2","R2>R1"]},"hold":null,"next":[130,263]},{"name":"暗黑巢道","boss":false,"seeds":[[123,108]],"reuse":null,"door":{"warps":["R2>R0","R0>R2"]},"hold":null,"next":[85,159]},{"name":"王房","boss":true,"seeds":[[132,66]],"reuse":null,"door":null,"hold":null,"next":null}],"boss":{"at":[132,66]}},"r6":{"name":"舊格拉斯特海姆","zones":[{"name":"騎士團大廳","boss":false,"seeds":[[200,58]],"reuse":null,"door":{"warps":["R0>R3","R3>R0"]},"hold":null,"next":[43,128]},{"name":"迴廊","boss":false,"seeds":[[40,136]],"reuse":null,"door":{"warps":["R3>R4","R4>R3"]},"hold":null,"next":[74,130]},{"name":"地下牢","boss":false,"seeds":[[109,118]],"reuse":null,"door":{"warps":["R4>R2","R2>R4"]},"hold":null,"next":[143,177]},{"name":"王房","boss":true,"seeds":[[149,235]],"reuse":null,"door":null,"hold":null,"next":null}],"boss":{"at":[149,235]}},"r7":{"name":"死者之國","zones":[{"name":"亡者之街","boss":false,"seeds":[[195,252]],"reuse":null,"door":{"cells":[[124,166,145,167],[125,167,147,169],[155,178,170,179],[153,179,165,180],[166,179,170,180],[153,180,170,181],[232,180,251,181],[233,181,251,182],[233,182,252,183]]},"hold":null,"next":[232,174]},{"name":"枯樹廣場","boss":false,"seeds":[[197,129]],"reuse":null,"door":{"cells":[[227,85,235,86],[226,86,235,87],[178,87,186,89],[192,88,198,89],[178,89,187,90],[190,89,197,91],[204,90,213,91],[214,90,216,91],[205,91,216,92],[204,92,217,93],[130,95,147,97],[167,95,168,96],[167,96,170,97],[129,97,148,98],[152,97,170,98],[153,98,165,99],[166,98,170,99],[153,99,170,100],[73,109,79,111],[81,110,91,112],[73,111,80,112]]},"hold":null,"next":[160,91]},{"name":"北方墓地","boss":false,"seeds":[[211,34]],"reuse":null,"door":{"cells":[[231,27,232,28],[233,27,234,28],[231,28,234,34],[231,34,232,35],[233,34,234,35]]},"hold":null,"next":[239,28]},{"name":"冥界廣場","boss":true,"seeds":[[297,55]],"reuse":null,"door":null,"hold":null,"next":null}],"boss":{"at":[297,55]}},"r8":{"name":"封印神殿","zones":[{"name":"墓穴入口","boss":false,"seeds":[[266,113]],"reuse":null,"door":{"cells":[[207,149,218,151],[206,151,218,152]]},"hold":null,"next":[206,155]},{"name":"使徒迴廊","boss":false,"seeds":[[227,198]],"reuse":null,"door":{"cells":[[185,195,186,196],[185,196,188,200],[185,200,186,201]]},"hold":null,"next":[183,195]},{"name":"封印之間","boss":false,"seeds":[[82,177]],"reuse":null,"door":{"cells":[[82,119,90,120],[83,120,89,122]]},"hold":{"at":[[201,229],[68,110],[68,229],[145,124]],"r":4,"secs":30,"frac":0,"min":2},"next":[83,115]},{"name":"蠅巢之間","boss":false,"seeds":[[101,43]],"reuse":null,"door":{"cells":[[164,62,176,63],[164,63,169,64],[171,63,176,64],[164,64,176,65],[154,68,158,70],[153,70,159,71],[115,82,116,83],[117,82,118,83],[115,83,118,92],[123,108,124,109],[121,109,124,119],[123,119,124,120]]},"hold":null,"next":[167,68]},{"name":"王房","boss":true,"seeds":[[175,119],[248,43]],"reuse":null,"door":null,"hold":null,"next":null}],"boss":{"at":[175,119]}}});
   document.addEventListener("ro-helper-read-raid",()=>{
     try{document.documentElement.dataset.roHelperRaidActive=window.RO_RAID?.inRaid?.()?"on":"off";}catch{document.documentElement.dataset.roHelperRaidActive="off";}
+    try{
+      const s=window.RO_RAIDUI?.state?.(),g=s?.g,iv=s?.invites?.[0];
+      const group=g?{gid:String(g.gid??g.id??g.rid+':'+g.leader),rid:g.rid,name:g.name,leader:g.leader,min:g.min,state:g.state,open:!!g.open,
+        members:(g.members||[]).slice(0,30).map(m=>({aid:m.aid,name:m.name,ready:!!m.ready,at:m.at})),
+        needs:(g.needs||[]).slice(0,10).map(n=>({hard:!!n.hard,have:n.have,need:n.need}))}:null;
+      document.documentElement.dataset.roHelperRaidGroup=JSON.stringify({me:s?.meAid||0,group,pool:!!s?.pool,invite:iv?{gid:iv.gid,rid:iv.rid,from:iv.from,name:iv.name}:null});
+    }catch{delete document.documentElement.dataset.roHelperRaidGroup;}
   });
   document.addEventListener("ro-helper-open-raid",()=>{
     if(location.hostname!=="ro.hans-webgametw.com" || !document.body.classList.contains("in-lobby"))return;
@@ -4419,7 +4426,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V85.2 網頁控制特別版";
+  const versionName = "Gear V86.0 網頁控制特別版";
   let runtimeInvalidated = false;
   const button = document.createElement("button");
   button.type = "button";
@@ -4556,18 +4563,73 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
     return visit.at===at && visit.departed;
   }
 
+function normalizeRaidPreset(value) {
+  let raw=value;if(typeof raw==='string'){try{raw=JSON.parse(raw);}catch{raw={};}}
+  raw=raw&&typeof raw==='object'?raw:{};
+  const names=Array.isArray(raw.names)?raw.names:typeof raw.names==='string'?raw.names.split(/[\r\n,，;；]+/):[];
+  return {role:['leader','member'].includes(raw.role)?raw.role:'off',names:[...new Set(names.filter(n=>typeof n==='string').map(n=>n.trim()).filter(n=>n&&n.length<=80))].slice(0,29),accept:raw.accept!==false,fill:raw.fill!==false};
+}
+function raidPresetInviteAllowed(preset,invitation,mode,raidName) {
+  return Boolean(preset.role!=='off'&&preset.accept&&invitation&&preset.names.includes(invitation.from)&&
+    (mode==='any'||invitation.rid===mode||invitation.name===raidName));
+}
+function raidPresetGroupReadiness(preset,group,me) {
+  if(!group)return {ready:false,reason:'等待副本團資料',missing:[]};
+  const present=new Set((group.members||[]).map(m=>m.name)),missing=preset.names.filter(n=>!present.has(n));
+  if(preset.role!=='leader'||group.leader!==me)return {ready:false,reason:'已準備，等待團長出發',missing};
+  if(missing.length)return {ready:false,reason:'等待固定隊友：'+missing.join('、'),missing};
+  if(group.members.length<Math.max(6,group.min||6))return {ready:false,reason:'等待副本人數達到 '+Math.max(6,group.min||6)+' 人',missing};
+  if((group.needs||[]).some(n=>n.hard&&(!Number.isFinite(n.have)||!Number.isFinite(n.need)||n.have<n.need)))return {ready:false,reason:'等待遊戲要求的補師／隊伍條件',missing};
+  if(group.members.some(m=>m.at==='off'))return {ready:false,reason:'等待隊友上線',missing};
+  if(group.members.some(m=>m.aid!==group.leader&&!m.ready))return {ready:false,reason:'等待隊友按準備',missing};
+  return {ready:true,reason:'固定隊友已到齊並準備，倒數出發',missing};
+}
+
   const raidControls=document.createElement("div");
   const raidMode=document.createElement("select");raidMode.setAttribute("aria-label","副本遠征");
   raidMode.append(new Option("副本遠征：關","off"),new Option("副本：我能打的都可以","any"));
   for(const [id,name] of [["r1","獸人的記憶"],["r2","章魚洞穴"],["r3","恐怖玩具工廠"],["r4","尼德霍格之巢"],["r5","驚駭森靈之巢"],["r6","舊格拉斯特海姆"],["r7","死者之國"],["r8","封印神殿"]])raidMode.append(new Option("副本："+name,id));
   const raidRoll=document.createElement("select");raidRoll.setAttribute("aria-label","副本掉落擲骰");
   for(const [id,name] of [["","手動擲骰"],["need","需要"],["greed","貪婪"],["pass","放棄"]])raidRoll.append(new Option("副本擲骰："+name,id));
+  const raidPresetBox=document.createElement('details'),raidPresetTitle=document.createElement('summary');raidPresetTitle.textContent='預先組隊打副本';
+  const raidPresetRole=document.createElement('select');raidPresetRole.setAttribute('aria-label','預先組隊角色');
+  raidPresetRole.append(new Option('預先組隊：關（快速加入）','off'),new Option('我是隊長：邀請固定名單','leader'),new Option('我是隊員：等待指定邀請','member'));
+  const raidPresetNames=document.createElement('textarea');raidPresetNames.rows=4;raidPresetNames.maxLength=2048;raidPresetNames.style.cssText='width:100%;box-sizing:border-box';raidPresetNames.placeholder='固定隊友／可同意的邀請人，每行一個角色名稱';raidPresetNames.setAttribute('aria-label','固定隊友與邀請人名單');
+  const raidPresetAccept=document.createElement('input');raidPresetAccept.type='checkbox';const raidPresetAcceptRow=document.createElement('label');raidPresetAcceptRow.style.display='block';raidPresetAcceptRow.append(raidPresetAccept,' 自動同意名單內的副本邀請');
+  const raidPresetFill=document.createElement('input');raidPresetFill.type='checkbox';const raidPresetFillRow=document.createElement('label');raidPresetFillRow.style.display='block';raidPresetFillRow.append(raidPresetFill,' 名單到齊後公開招募補人');
+  const raidPresetHelp=document.createElement('small');raidPresetHelp.style.display='block';raidPresetHelp.textContent='隊長先開私人團邀請固定名單；到齊後可公開補人，至少6人且準備後出發。隊員等待名單內邀請；兩種角色都可自動同意。未指定副本時，隊長選目前可打的最高副本。';
+  raidPresetBox.append(raidPresetTitle,raidPresetRole,raidPresetNames,raidPresetAcceptRow,raidPresetFillRow,raidPresetHelp);
+  const raidPreset=()=>normalizeRaidPreset(readSetting('ro-helper-raid-preset'));
+  const loadRaidPreset=()=>{const p=raidPreset(),signature=JSON.stringify(p);if(signature!==raidPresetSignature){raidPresetSignature=signature;raidPresetGroupId=null;raidPresetInvited.clear();}raidPresetRole.value=p.role;raidPresetNames.value=p.names.join('\n');raidPresetAccept.checked=p.accept;raidPresetFill.checked=p.fill;raidPresetFillRow.hidden=p.role!=="leader";};
+  let raidPresetGroupId=null,raidPresetSignature="";const raidPresetInvited=new Map();
+  const saveRaidPreset=()=>{const p=normalizeRaidPreset({role:raidPresetRole.value,names:raidPresetNames.value,accept:raidPresetAccept.checked,fill:raidPresetFill.checked});writeSetting('ro-helper-raid-preset',JSON.stringify(p));raidPresetGroupId=null;raidPresetInvited.clear();loadRaidPreset();raidNextAction=0;};
+  for(const el of [raidPresetRole,raidPresetNames,raidPresetAccept,raidPresetFill])el.addEventListener('change',saveRaidPreset);
+  function readRaidGroupSnapshot(){try{return JSON.parse(document.documentElement.dataset.roHelperRaidGroup||'null');}catch{return null;}}
+  function handleRaidPresetGroup(snapshot,preset,click,now){
+    const group=snapshot?.group;
+    if(!group){const cancel=document.getElementById('rg-chip-x');if(snapshot?.pool&&cancel){click(cancel);status.textContent='預先組隊｜取消原本的隨機配對';}else status.textContent='預先組隊｜等待副本團資料';return true;}
+    if(group.gid!==raidPresetGroupId){raidPresetGroupId=group.gid;raidPresetInvited.clear();}
+    const selected=raidMode.value,raidName=raidMode.selectedOptions?.[0]?.textContent.replace(/^副本：/,'');
+    if(selected!=='any'&&group.rid!==selected&&group.name!==raidName){status.textContent='已在其他副本團，請先手動離團或調整副本設定';return true;}
+    const readiness=raidPresetGroupReadiness(preset,group,snapshot.me);
+    if(preset.role==='leader'&&group.leader===snapshot.me){
+      const input=document.getElementById('rg-s-inv'),invite=document.getElementById('rg-s-invb');
+      const next=readiness.missing.find(n=>now-(raidPresetInvited.get(n)??-Infinity)>=30000);
+      if(next&&input&&invite){input.value=next;input.dispatchEvent(new Event('input',{bubbles:true}));if(click(invite)){raidPresetInvited.set(next,now);status.textContent='預先組隊｜已邀請 '+next;return true;}}
+      const publicToggle=document.getElementById('rg-s-open');
+      if(!readiness.missing.length&&preset.fill&&!group.open&&publicToggle&&!publicToggle.checked&&click(publicToggle)){status.textContent='預先組隊｜固定名單到齊，公開招募補人';return true;}
+      const ready=document.getElementById('rg-w-ready'),go=document.getElementById('rg-w-go');
+      if(readiness.ready&&(!ready||ready.textContent.trim()!=='準備好了')&&go&&!go.disabled&&click(go))raidNextAction=now+10000;
+    }
+    status.textContent='預先組隊｜'+readiness.reason;return true;
+  }
+
   const raidMechanicsToggle=document.createElement("input");raidMechanicsToggle.type="checkbox";
   const raidMechanicsRow=document.createElement("label");raidMechanicsRow.append(raidMechanicsToggle," 自動處理副本機制");raidMechanicsRow.style.display="block";
   raidMechanicsToggle.onchange=()=>{writeSetting("ro-helper-raid-mechanics",raidMechanicsToggle.checked?"on":"off");refreshRaidSettings();};
   const raidHelp=document.createElement("small");raidHelp.textContent="回城後快速加入、準備；隊長符合條件時倒數出發。每副本每日一次，失敗也計次。";
-  raidHelp.style.display="block";raidControls.append(raidMode,raidRoll,raidMechanicsRow,raidHelp);
-  const refreshRaidSettings=()=>{raidMode.value=readSetting("ro-helper-raid-mode")||"off";if(!raidMode.value)raidMode.value="off";raidRoll.value=readSetting("ro-helper-raid-roll")||"";raidMechanicsToggle.checked=readSetting("ro-helper-raid-mechanics")!=="off";const enabled=raidMode.value!=="off"&&raidMechanicsToggle.checked;document.documentElement.dataset.roHelperRaidMechanicsWanted=enabled?"on":"off";document.documentElement.dataset.roHelperRaidMechanics=enabled&&button.getAttribute("aria-pressed")==="true"?"on":"off";};
+  raidHelp.style.display="block";raidControls.append(raidMode,raidRoll,raidPresetBox,raidMechanicsRow,raidHelp);
+  const refreshRaidSettings=()=>{loadRaidPreset();raidMode.value=readSetting("ro-helper-raid-mode")||"off";if(!raidMode.value)raidMode.value="off";raidRoll.value=readSetting("ro-helper-raid-roll")||"";raidMechanicsToggle.checked=readSetting("ro-helper-raid-mechanics")!=="off";const enabled=raidMode.value!=="off"&&raidMechanicsToggle.checked;document.documentElement.dataset.roHelperRaidMechanicsWanted=enabled?"on":"off";document.documentElement.dataset.roHelperRaidMechanics=enabled&&button.getAttribute("aria-pressed")==="true"?"on":"off";};
   raidMode.onchange=()=>{writeSetting("ro-helper-raid-mode",raidMode.value);raidNextAction=0;status.textContent=raidMode.value==="off"?"已關閉自動副本；已加入的團或配對請在遊戲中取消":"副本遠征已設定，回城後自動配對";refreshRaidSettings();};
   raidRoll.onchange=()=>writeSetting("ro-helper-raid-roll",raidRoll.value);refreshRaidSettings();
   let raidNextAction=0,raidResultSince=0;
@@ -4597,6 +4659,16 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
       raidResultSince=0;return false;
     }
     raidResultSince=0;
+    const preset=raidPreset(),snapshot=readRaidGroupSnapshot();
+    if(preset.role!=='off'&&!worldBossActive()&&!snapshot?.group){
+      const iv=snapshot?.invite,box=document.getElementById('rg-inv');
+      const raidName=raidMode.selectedOptions?.[0]?.textContent.replace(/^副本：/,'');
+      if(raidPresetInviteAllowed(preset,iv,raidMode.value,raidName)&&box?.querySelector('b')?.textContent.trim()===iv.from){
+        if(document.querySelector('#picker:not(.hidden):not(.closing),#pause:not(.hidden),#options:not(.hidden),dialog[open]'))return false;
+        if(click(document.getElementById('rg-i-ok'))){status.textContent='預先組隊｜已同意 '+iv.from+' 的副本邀請';return true;}
+        status.textContent='預先組隊｜等待同意固定名單的邀請';return true;
+      }
+    }
     const raidReturn=document.getElementById("rd-back");
     if(shown(raidReturn)){click(raidReturn);status.textContent="副本｜返回尚在進行的副本";return true;}
     if(document.getElementById("rg-count")){status.textContent="副本：等待倒數出發";return true;}
@@ -4604,9 +4676,12 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
     if(shown(chip)){
       const open=document.getElementById("rg-chip-open");if(open && !document.getElementById("rg-win"))click(open);
       const ready=document.getElementById("rg-w-ready");if(ready && ready.textContent.trim()==="準備好了")click(ready);
+      if(preset.role!=="off")return handleRaidPresetGroup(snapshot,preset,click,now);
       const go=document.getElementById("rg-w-go");if(go && !go.disabled && (!ready || ready.textContent.trim()!=="準備好了") && click(go))raidNextAction=now+10000;
       status.textContent="副本：配對／等待團員與出發條件";return true;
     }
+    if(preset.role==='member'){status.textContent='預先組隊｜等待固定名單內的副本邀請';return false;}
+    if(preset.role==='leader'&&!preset.names.length){status.textContent='預先組隊｜請先填寫固定隊友名單';return true;}
     if(!document.body.classList.contains("in-lobby"))return false;
     if(worldBossActive() || shown(document.getElementById("wb-join")) || document.querySelector("#ro-helper-settings[open],#ro-helper-target-storage[open]"))return false;
     const shop=document.getElementById("raidshop");
@@ -4615,13 +4690,23 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
     const all=shop.querySelector('[data-rgf="all"]');if(all && !all.classList.contains("primary")){click(all);return true;}
     const cards=[...shop.querySelectorAll("[data-rid].rg-card")];
     const eligible=cards.filter(el=>!el.classList.contains("locked")&&!el.querySelector(".rg-done")&&!/…/.test(el.querySelector(".stg-state")?.textContent||"…"));
-    if(raidMode.value==="any"){
+    if(raidMode.value==="any"&&preset.role!=="leader"){
       if(eligible.length && click(shop.querySelector('[data-rgq="any"]')))raidNextAction=now+10000;
       status.textContent=eligible.length?"副本：快速加入可挑戰的副本":"副本：等待資格／今日次數，遊戲有可打副本才加入";return true;
     }
-    const card=cards.find(el=>el.dataset.rid===raidMode.value);
+    const card=raidMode.value==="any"&&preset.role==="leader"?eligible.at(-1):cards.find(el=>el.dataset.rid===raidMode.value);
     if(!card){status.textContent="副本清單尚未提供所選副本";return true;}
     if(!card.classList.contains("sel")){click(card);return true;}
+    if(preset.role==='leader'){
+      if(!eligible.includes(card)){status.textContent='預先組隊｜今日次數或戰力不符，等待遊戲資格';return true;}
+      const form=shop.querySelector('#rg-f-ok');
+      if(form){
+        const open=shop.querySelector('#rg-f-open');if(open)open.checked=false;
+        if(click(form))raidNextAction=now+10000;
+        status.textContent='預先組隊｜建立固定名單私人團';return true;
+      }
+      click(shop.querySelector('#rg-create'));status.textContent='預先組隊｜開啟開團設定';return true;
+    }
     const quick=shop.querySelector("#rg-quick");
     if(eligible.includes(card) && click(quick))raidNextAction=now+10000;
     status.textContent=quick?.disabled || !eligible.includes(card)?"副本：今日已參加或未達資格，等待遊戲開放":"副本：快速加入所選副本";return true;
@@ -4697,7 +4782,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
     "upgrade","character-growth","chest-discovery-threshold","chest-mode","collision-mode","difficulty","difficulty-solo","difficulty-party","difficulty-objective",
     "expedition-lap","expedition-speed","focus-skill","focus-treasure","focus-treasure-2","force-gear","inventory","inventory-tiers","login-character",
     "goal-action","magnet-minutes","no-flip-level","panel","party-role","pickup-mode","roll-choice","skills","stage","stage-mode","stage-repeats","stage-rotation",
-    "gear-movement","gs-boss-cards","treasures","seen-stages","target-pickup","target-storage","treasure-category-priority","treasure-mode","treasure-priority","world-boss","world-boss-mode","world-boss-lead","raid-mode","raid-roll","raid-mechanics",
+    "gear-movement","gs-boss-cards","treasures","seen-stages","target-pickup","target-storage","treasure-category-priority","treasure-mode","treasure-priority","world-boss","world-boss-mode","world-boss-lead","raid-mode","raid-roll","raid-mechanics","raid-preset",
     "skill-level-plan","arrow-extra1","arrow-extra2","arrow-extra3","arrow-mode","arrow-starter","arrow-starter2","arrow-starter3","arrow-preference"
   ].map(key=>"ro-helper-"+key));
   portableSettingKeys.add("ro-helper-recycle-cards");
