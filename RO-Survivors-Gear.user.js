@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 87.2
+// @version 87.3
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -4428,7 +4428,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V87.2 網頁控制特別版";
+  const versionName = "Gear V87.3 網頁控制特別版";
   let automationMode="normal";
   const raidCompletion={entered:false,finished:false};
   const compactRaidToggle=document.createElement("button");compactRaidToggle.type="button";
@@ -4707,12 +4707,17 @@ function raidGroupPanelAction(snapshot,preset,now) {
         const index={need:0,greed:1,pass:2}[choice];const b=box.querySelectorAll("button")[index];
         if(click(b)){status.textContent="副本：已擲骰";return true;}
       }}
-      const back=document.getElementById("rd-leave")||document.getElementById("rfx-back");
+      const back=document.getElementById("rfx-back")||document.getElementById("rd-leave");
       if(shown(back)&&["success","failure","interrupted"].includes(evidence.kind)){
         raidResultSince ||= now;
-        // Native result may linger for final loot rolls. Retain its full 55-second window.
-        if(now-raidResultSince>=55000)click(back);
-        status.textContent="副本已結算，等待擲骰與掉落完成後返回";return true;
+        const pendingRoll=[...document.querySelectorAll("#rd-roll .rd-it")].some(box=>{
+          const result=box.querySelector(".rd-res")?.textContent.trim()||"";
+          return !result.startsWith("→");
+        });
+        if(now-raidResultSince>=2000&&!pendingRoll){
+          status.textContent=click(back)?"副本：已自動點擊離開結算":"副本：等待自動結算";
+        }else status.textContent=pendingRoll?"副本：等待擲骰結果，完成後自動結算":"副本：準備自動結算";
+        return true;
       }
       raidResultSince=0;return false;
     }
