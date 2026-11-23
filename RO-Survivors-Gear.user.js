@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 87.0
+// @version 87.1
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -84,7 +84,7 @@ function createRaidMechanismObserver(now=()=>Date.now()) {
   function message(s,socket){
     if(!s||typeof s.k!=="string"||!s.k.startsWith("rd.")||s.k.startsWith("rd.g."))return;
     if(s.k==="rd.seat"||(s.k==="rd.back"&&s.rid&&s.char)){
-      owner=null;state.rid=s.rid;state.me=0;state.aid=s.char?.aid||0;state.job=s.char?.promotion||s.char?.job||"";state.zone=0;state.zi=null;state.next=null;state.targets.clear();state.players.clear();state.trait={set:[]};state.safe=null;state.mark=null;state.shield=0;state.down=false;state.ended=false;state.seen=now();return;
+      owner=null;state.rid=s.rid;state.runId=s.sid||null;state.result=null;state.me=0;state.aid=s.char?.aid||0;state.job=s.char?.promotion||s.char?.job||"";state.zone=0;state.zi=null;state.next=null;state.targets.clear();state.players.clear();state.trait={set:[]};state.safe=null;state.mark=null;state.shield=0;state.down=false;state.ended=false;state.seen=now();return;
     }
     if(s.k==="rd.start"){
       owner=socket;state.me=s.me;state.skew=Number.isFinite(s.now)?s.now-now():0;state.zone=s.zone||0;state.zi=cleanZone(s.zoneInfo);state.next=null;state.targets.clear();state.players.clear();targets(s.targets);players(s.players);state.trait=cleanTrait(s.trait);state.down=!!s.down;state.ended=s.state==='result';state.safe=null;state.mark=null;state.shield=0;
@@ -108,7 +108,7 @@ function createRaidMechanismObserver(now=()=>Date.now()) {
       if(s.m==='mark'&&Number.isFinite(s.at))state.mark={until:s.at,who:(s.who||[]).slice(0,64),r:Math.min(1500,Math.max(20,s.r||200))};
     }else if(s.k==="rd.down")state.down=true;
     else if(s.k==="rd.revive")state.down=false;
-    else if(s.k==="rd.end"||s.k==="rd.out"){state.ended=true;state.safe=null;state.mark=null;state.targets.clear();state.players.clear();owner=null;}
+    else if(s.k==="rd.end"||s.k==="rd.out"){state.ended=true;state.result={kind:s.k==="rd.end"?(s.why==="kill"?"success":"failure"):"interrupted",runId:state.runId||null};state.safe=null;state.mark=null;state.targets.clear();state.players.clear();owner=null;}
     state.seen=now();
   }
   function binary(data,socket){
@@ -218,6 +218,7 @@ function installRaidMechanics(book) {
     let current=wrap(window.RO_WBTT);
     Object.defineProperty(window,'RO_WBTT',{configurable:true,enumerable:descriptor?.enumerable??true,get:()=>current,set:value=>{current=wrap(value);}});
   }
+  window.__roHelperRaidOutcome=()=>observer.state.result||{kind:"unknown",runId:observer.state.runId||null};
   window.__roHelperRaidMechanics=game=>{
     try{
       if(!game?.player||!window.RO_RAID?.inRaid?.()||document.documentElement.dataset.roHelperRaidMechanics!=='on')return null;
@@ -292,6 +293,7 @@ function installRaidMechanics(book) {
   installRaidMechanics({"r1":{"name":"獸人的記憶","zones":[{"name":"海岸村落","boss":false,"seeds":[[122,300]],"reuse":null,"door":{"warps":["Z1>Z2","Z2>Z1"]},"hold":null,"next":[219,252]},{"name":"村莊廣場","boss":false,"seeds":[[213,196]],"reuse":null,"door":{"warps":["Z2>Z3","Z3>Z2"]},"hold":null,"next":[120,233]},{"name":"祭壇前","boss":false,"seeds":[[113,262]],"reuse":null,"door":{"warps":["Z3>Z4","Z4>Z3"]},"hold":{"at":[113,262],"r":5,"secs":40,"frac":0.34},"next":[102,166]},{"name":"王房","boss":true,"seeds":[[155,149]],"reuse":null,"door":null,"hold":null,"next":null}],"boss":{"at":[155,140]}},"r2":{"name":"章魚洞穴","zones":[{"name":"中庭","boss":false,"seeds":[[105,187]],"reuse":null,"door":{"cells":[[116,109,144,110],[116,110,122,111],[123,110,137,111],[138,110,144,111],[116,111,144,112],[186,145,187,146],[186,146,189,153],[190,187,191,188],[190,188,193,192],[122,228,126,229],[134,228,138,229],[123,229,126,231],[134,229,137,231]]},"hold":null,"next":[128,103]},{"name":"四座殿堂","boss":false,"seeds":[[45,81],[213,220]],"reuse":null,"door":null,"hold":null,"next":[129,160]},{"name":"王房","boss":true,"seeds":[[105,187]],"reuse":1,"door":null,"hold":null,"next":null}],"boss":{"at":[129,170]}},"r3":{"name":"恐怖玩具工廠","zones":[{"name":"倉庫","boss":false,"seeds":[[61,197]],"reuse":null,"door":{"warps":["R1>R2","R2>R1"]},"hold":null,"next":[132,186]},{"name":"組裝線","boss":false,"seeds":[[183,219]],"reuse":null,"door":{"warps":["R2>R3","R3>R2"]},"hold":null,"next":[186,127]},{"name":"包裝區","boss":false,"seeds":[[183,111],[221,71]],"reuse":null,"door":{"warps":["R4>R0","R0>R4"]},"hold":null,"next":[159,39]},{"name":"王房","boss":true,"seeds":[[66,16]],"reuse":null,"door":null,"hold":null,"next":null}],"boss":{"at":[66,16]}},"r4":{"name":"尼德霍格之巢","zones":[{"name":"世界樹根","boss":false,"seeds":[[192,381]],"reuse":null,"door":{"cells":[[284,336,290,338],[284,338,291,339],[372,336,378,338],[371,338,378,339],[380,340,386,342]]},"hold":null,"next":[286,333]},{"name":"巢穴迴廊","boss":false,"seeds":[[302,297]],"reuse":null,"door":{"cells":[[236,280,242,282],[108,330,111,336],[110,336,111,337],[14,340,20,342]]},"hold":null,"next":[238,277]},{"name":"淨化祭壇","boss":false,"seeds":[[200,224]],"reuse":null,"door":{"warps":["N3>B","B>N3"]},"hold":{"at":[200,226],"r":6,"secs":45,"frac":0.34},"next":[200,142]},{"name":"王房","boss":true,"seeds":[[200,77]],"reuse":null,"door":null,"hold":null,"next":null}],"boss":{"at":[200,77]}},"r5":{"name":"驚駭森靈之巢","zones":[{"name":"巢穴入口","boss":false,"seeds":[[298,327]],"reuse":null,"door":{"warps":["R3>R1","R1>R3"]},"hold":null,"next":[245,210]},{"name":"蛋室","boss":false,"seeds":[[268,132]],"reuse":null,"door":{"warps":["R1>R2","R2>R1"]},"hold":null,"next":[130,263]},{"name":"暗黑巢道","boss":false,"seeds":[[123,108]],"reuse":null,"door":{"warps":["R2>R0","R0>R2"]},"hold":null,"next":[85,159]},{"name":"王房","boss":true,"seeds":[[132,66]],"reuse":null,"door":null,"hold":null,"next":null}],"boss":{"at":[132,66]}},"r6":{"name":"舊格拉斯特海姆","zones":[{"name":"騎士團大廳","boss":false,"seeds":[[200,58]],"reuse":null,"door":{"warps":["R0>R3","R3>R0"]},"hold":null,"next":[43,128]},{"name":"迴廊","boss":false,"seeds":[[40,136]],"reuse":null,"door":{"warps":["R3>R4","R4>R3"]},"hold":null,"next":[74,130]},{"name":"地下牢","boss":false,"seeds":[[109,118]],"reuse":null,"door":{"warps":["R4>R2","R2>R4"]},"hold":null,"next":[143,177]},{"name":"王房","boss":true,"seeds":[[149,235]],"reuse":null,"door":null,"hold":null,"next":null}],"boss":{"at":[149,235]}},"r7":{"name":"死者之國","zones":[{"name":"亡者之街","boss":false,"seeds":[[195,252]],"reuse":null,"door":{"cells":[[124,166,145,167],[125,167,147,169],[155,178,170,179],[153,179,165,180],[166,179,170,180],[153,180,170,181],[232,180,251,181],[233,181,251,182],[233,182,252,183]]},"hold":null,"next":[232,174]},{"name":"枯樹廣場","boss":false,"seeds":[[197,129]],"reuse":null,"door":{"cells":[[227,85,235,86],[226,86,235,87],[178,87,186,89],[192,88,198,89],[178,89,187,90],[190,89,197,91],[204,90,213,91],[214,90,216,91],[205,91,216,92],[204,92,217,93],[130,95,147,97],[167,95,168,96],[167,96,170,97],[129,97,148,98],[152,97,170,98],[153,98,165,99],[166,98,170,99],[153,99,170,100],[73,109,79,111],[81,110,91,112],[73,111,80,112]]},"hold":null,"next":[160,91]},{"name":"北方墓地","boss":false,"seeds":[[211,34]],"reuse":null,"door":{"cells":[[231,27,232,28],[233,27,234,28],[231,28,234,34],[231,34,232,35],[233,34,234,35]]},"hold":null,"next":[239,28]},{"name":"冥界廣場","boss":true,"seeds":[[297,55]],"reuse":null,"door":null,"hold":null,"next":null}],"boss":{"at":[297,55]}},"r8":{"name":"封印神殿","zones":[{"name":"墓穴入口","boss":false,"seeds":[[266,113]],"reuse":null,"door":{"cells":[[207,149,218,151],[206,151,218,152]]},"hold":null,"next":[206,155]},{"name":"使徒迴廊","boss":false,"seeds":[[227,198]],"reuse":null,"door":{"cells":[[185,195,186,196],[185,196,188,200],[185,200,186,201]]},"hold":null,"next":[183,195]},{"name":"封印之間","boss":false,"seeds":[[82,177]],"reuse":null,"door":{"cells":[[82,119,90,120],[83,120,89,122]]},"hold":{"at":[[201,229],[68,110],[68,229],[145,124]],"r":4,"secs":30,"frac":0,"min":2},"next":[83,115]},{"name":"蠅巢之間","boss":false,"seeds":[[101,43]],"reuse":null,"door":{"cells":[[164,62,176,63],[164,63,169,64],[171,63,176,64],[164,64,176,65],[154,68,158,70],[153,70,159,71],[115,82,116,83],[117,82,118,83],[115,83,118,92],[123,108,124,109],[121,109,124,119],[123,119,124,120]]},"hold":null,"next":[167,68]},{"name":"王房","boss":true,"seeds":[[175,119],[248,43]],"reuse":null,"door":null,"hold":null,"next":null}],"boss":{"at":[175,119]}}});
   document.addEventListener("ro-helper-read-raid",()=>{
     try{document.documentElement.dataset.roHelperRaidActive=window.RO_RAID?.inRaid?.()?"on":"off";}catch{document.documentElement.dataset.roHelperRaidActive="off";}
+    try{document.documentElement.dataset.roHelperRaidOutcome=JSON.stringify(window.__roHelperRaidOutcome?.()||null);}catch{delete document.documentElement.dataset.roHelperRaidOutcome;}
     try{
       const s=window.RO_RAIDUI?.state?.(),g=s?.g,iv=s?.invites?.[0];
       const group=g?{gid:String(g.gid??g.id??g.rid+':'+g.leader),rid:g.rid,name:g.name,leader:g.leader,min:g.min,state:g.state,open:!!g.open,
@@ -4426,7 +4428,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V87.0 網頁控制特別版";
+  const versionName = "Gear V87.1 網頁控制特別版";
   let automationMode="normal";
   const raidCompletion={entered:false,finished:false};
   const compactRaidToggle=document.createElement("button");compactRaidToggle.type="button";
@@ -4593,10 +4595,25 @@ function raidPresetGroupReadiness(preset,group,me) {
   return {ready:true,reason:'固定隊友已到齊並準備，倒數出發',missing};
 }
 
-function raidCompletionTransition(state,active,ended) {
-  if(active){state.entered=true;if(ended)state.finished=true;return false;}
+function resetRaidCompletion(state){Object.assign(state,{entered:false,finished:false,proof:false,result:null,runId:null});}
+function readRaidCompletionEvidence(active){
+  let data;try{data=JSON.parse(document.documentElement.dataset.roHelperRaidOutcome||'null');}catch{}
+  if(active&&document.querySelector('#rd-panel .rd-res.win'))return {kind:'success',runId:data?.runId||null};
+  if(active&&document.querySelector('#rd-panel .rd-res.lose'))return {kind:'failure',runId:data?.runId||null};
+  return data&&['success','failure','interrupted'].includes(data.kind)?data:{kind:'unknown',runId:data?.runId||null};
+}
+function raidCompletionTransition(state,active,evidence){
+  const kind=evidence?.kind||'unknown',runId=evidence?.runId||null;
+  if(active){
+    if(state.runId&&runId&&state.runId!==runId)resetRaidCompletion(state);
+    state.entered=true;if(runId)state.runId=runId;
+  }
   if(!state.entered)return false;
-  const completed=state.finished;state.entered=false;state.finished=false;return completed;
+  const same=!state.runId||!runId||state.runId===runId;
+  if(same&&kind==='success'){state.finished=true;state.proof=true;state.result='success';}
+  else if(same&&(kind==='failure'||kind==='interrupted')){state.result=kind;state.finished=false;state.proof=false;}
+  if(!active&&state.proof===true&&state.finished===true){resetRaidCompletion(state);return true;}
+  return false;
 }
 
   const raidControls=document.createElement("div");
@@ -4642,14 +4659,14 @@ function raidCompletionTransition(state,active,ended) {
   const raidMechanicsRow=document.createElement("label");raidMechanicsRow.append(raidMechanicsToggle," 自動處理副本機制");raidMechanicsRow.style.display="block";
   raidMechanicsToggle.onchange=()=>{writeSetting("ro-helper-raid-mechanics",raidMechanicsToggle.checked?"on":"off");refreshRaidSettings();};
   const raidReturnNormal=document.createElement("input");raidReturnNormal.type="checkbox";
-  const raidReturnNormalRow=document.createElement("label");raidReturnNormalRow.style.display="block";raidReturnNormalRow.append(raidReturnNormal," 本次副本結束後開啟普通掛機");
-  raidReturnNormalRow.title="完成一場副本並返回後切換普通掛機；未勾選時維持遠征模式。";
+  const raidReturnNormalRow=document.createElement("label");raidReturnNormalRow.style.display="block";raidReturnNormalRow.append(raidReturnNormal," 本次副本通關後開啟普通掛機");
+  raidReturnNormalRow.title="確認本次副本通關並返回後才切換普通掛機；未勾選時維持遠征模式。";
   raidReturnNormal.onchange=()=>writeSetting("ro-helper-raid-return-normal",raidReturnNormal.checked?"on":"off");
   raidStartButton.onclick=()=>toggleAutomationMode("raid");
   const raidHelp=document.createElement("small");raidHelp.textContent="回城後快速加入、準備；隊長符合條件時倒數出發。每副本每日一次，失敗也計次。";
   raidHelp.style.display="block";raidControls.append(raidStartButton,raidMode,raidRoll,raidPresetBox,raidMechanicsRow,raidReturnNormalRow,raidHelp);
   const refreshRaidSettings=()=>{loadRaidPreset();raidReturnNormal.checked=readSetting("ro-helper-raid-return-normal")==="on";raidMode.value=readSetting("ro-helper-raid-mode")||"off";if(!raidMode.value)raidMode.value="off";raidRoll.value=readSetting("ro-helper-raid-roll")||"";raidMechanicsToggle.checked=readSetting("ro-helper-raid-mechanics")!=="off";const enabled=raidMode.value!=="off"&&raidMechanicsToggle.checked;document.documentElement.dataset.roHelperRaidMechanicsWanted=enabled?"on":"off";document.documentElement.dataset.roHelperRaidMechanics=enabled&&automationMode==="raid"&&Boolean(window.__roMenuHelper)?"on":"off";};
-  raidMode.onchange=()=>{writeSetting("ro-helper-raid-mode",raidMode.value);raidNextAction=0;status.textContent=raidMode.value==="off"?"已關閉自動副本；已加入的團或配對請在遊戲中取消":"副本遠征已設定，回城後自動配對";refreshRaidSettings();};
+  raidMode.onchange=()=>{resetRaidCompletion(raidCompletion);writeSetting("ro-helper-raid-mode",raidMode.value);raidNextAction=0;status.textContent=raidMode.value==="off"?"已關閉自動副本；已加入的團或配對請在遊戲中取消":"副本遠征已設定，回城後自動配對";refreshRaidSettings();};
   raidRoll.onchange=()=>writeSetting("ro-helper-raid-roll",raidRoll.value);refreshRaidSettings();
   let raidNextAction=0,raidResultSince=0,raidWaiting=false,raidWaitingText="",raidWaitingGroupId=null,raidGroupPanelOwned=false,raidFoldedGroup=null;
 function raidGroupPanelAction(snapshot,preset,now) {
@@ -4674,9 +4691,9 @@ function raidGroupPanelAction(snapshot,preset,now) {
     raidWaiting=false;raidWaitingText="";
     if(!taiwanGame)return false;
     const active=readRaidState(),now=Date.now();
+    const evidence=readRaidCompletionEvidence(active);
     if(automationMode==="raid"){
-      const ended=active&&Boolean(document.getElementById("rd-leave")||document.getElementById("rfx-back"));
-      if(raidCompletionTransition(raidCompletion,active,ended)&&raidReturnNormal.checked){
+      if(raidCompletionTransition(raidCompletion,active,evidence)&&raidReturnNormal.checked){
         automationMode="normal";updateAssistantButton(true);rememberRefresh();status.textContent="本次副本已結束，切換普通掛機";
       }
     }
@@ -4693,7 +4710,7 @@ function raidGroupPanelAction(snapshot,preset,now) {
         if(click(b)){status.textContent="副本：已擲骰";return true;}
       }}
       const back=document.getElementById("rd-leave")||document.getElementById("rfx-back");
-      if(shown(back)){
+      if(shown(back)&&["success","failure","interrupted"].includes(evidence.kind)){
         raidResultSince ||= now;
         // Native result may linger for final loot rolls. Retain its full 55-second window.
         if(now-raidResultSince>=55000)click(back);
@@ -4702,6 +4719,11 @@ function raidGroupPanelAction(snapshot,preset,now) {
       raidResultSince=0;return false;
     }
     raidResultSince=0;
+    if(raidCompletion.entered&&!raidCompletion.proof){
+      const resume=document.getElementById("rd-back");if(shown(resume))click(resume);
+      status.textContent=raidCompletion.result==="failure"?"副本未通關，保持遠征模式；請手動選擇後續安排":"副本尚未確認通關，等待返回原副本";
+      return true;
+    }
     const preset=raidPreset(),snapshot=readRaidGroupSnapshot();
     if(preset.role!=='off'&&!worldBossActive()&&!snapshot?.group){
       const iv=snapshot?.invite,box=document.getElementById('rg-inv');
@@ -11031,7 +11053,7 @@ void connectCoordinates(false);
     }
     const running=Boolean(window.__roMenuHelper);
     if(running&&automationMode===mode){toggle();return;}
-    automationMode=mode;raidCompletion.entered=false;raidCompletion.finished=false;
+    automationMode=mode;resetRaidCompletion(raidCompletion);
     if(running){updateAssistantButton(true);rememberRefresh();status.textContent=mode==="raid"?"已切換遠征掛機":"已切換普通掛機";}
     else toggle();
   }
@@ -11480,7 +11502,7 @@ void connectCoordinates(false);
       }
       const restoreGpuSaver = refreshRecovery.gpuSaver === true;
       automationMode=refreshRecovery.automationMode==="raid"?"raid":"normal";
-      raidCompletion.entered=!!refreshRecovery.raidCompletion?.entered;raidCompletion.finished=!!refreshRecovery.raidCompletion?.finished;
+      raidCompletion.entered=!!refreshRecovery.raidCompletion?.entered;raidCompletion.proof=refreshRecovery.raidCompletion?.proof===true;raidCompletion.finished=raidCompletion.proof&&refreshRecovery.raidCompletion?.finished===true;raidCompletion.result=refreshRecovery.raidCompletion?.result||null;raidCompletion.runId=refreshRecovery.raidCompletion?.runId||null;
       refreshRecovery = null;
       toggle(true);
       if (window.__roMenuHelper) {
