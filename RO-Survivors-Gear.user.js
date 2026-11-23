@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 84.0
+// @version 85.0
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -4419,7 +4419,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V84.0 網頁控制特別版";
+  const versionName = "Gear V85.0 網頁控制特別版";
   let runtimeInvalidated = false;
   const button = document.createElement("button");
   button.type = "button";
@@ -4696,7 +4696,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
     "auto-move","auto-party","auto-reroll","banish-basic","banish-skills","boss-target","card-stop-mode","card-stop-skill","card-stop-target",
     "upgrade","character-growth","chest-discovery-threshold","chest-mode","collision-mode","difficulty","difficulty-solo","difficulty-party","difficulty-objective",
     "expedition-lap","expedition-speed","focus-skill","focus-treasure","focus-treasure-2","force-gear","inventory","inventory-tiers","login-character",
-    "magnet-minutes","no-flip-level","panel","party-role","pickup-mode","roll-choice","skills","stage","stage-mode","stage-repeats","stage-rotation",
+    "goal-action","magnet-minutes","no-flip-level","panel","party-role","pickup-mode","roll-choice","skills","stage","stage-mode","stage-repeats","stage-rotation",
     "gear-movement","gs-boss-cards","treasures","seen-stages","target-pickup","target-storage","treasure-category-priority","treasure-mode","treasure-priority","world-boss","world-boss-mode","world-boss-lead","raid-mode","raid-roll","raid-mechanics",
     "skill-level-plan","arrow-extra1","arrow-extra2","arrow-extra3","arrow-mode","arrow-starter","arrow-starter2","arrow-starter3","arrow-preference"
   ].map(key=>"ro-helper-"+key));
@@ -8760,6 +8760,13 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
     writeSetting("ro-helper-chest-mode",chestMode.value);
     refreshChestDiscoverySetting();
   });
+  const goalAction=document.createElement("select");goalAction.setAttribute("aria-label","達標後處理");
+  goalAction.append(new Option("達標後：遊戲自動選（技能＋寶箱）","native"),new Option("達標後：保存卡片／寶箱","save"));
+  goalAction.title="遊戲自動選同時接管技能與寶箱，完全隨機且本局不能取消；兩邊已設定的目標都達成才開啟。";
+  const loadGoalAction=()=>{goalAction.value=readSetting("ro-helper-goal-action")==="save"?"save":"native";};loadGoalAction();
+  goalAction.onchange=()=>{writeSetting("ro-helper-goal-action",goalAction.value);goalActionHelp.hidden=goalAction.value==="save";};
+  const goalActionSetting=document.createElement("div"),goalActionHelp=document.createElement("small");
+  goalActionHelp.textContent="自動選會同時接管技能與寶箱；已設定條件皆達標才開啟，本局不能取消。";goalActionHelp.style.display="block";goalActionSetting.append(goalAction,goalActionHelp);
   const noFlipSetting = document.createElement("label");
   noFlipSetting.textContent = "局內等級停止選技能卡（0＝關） ";
   const noFlipLevel = document.createElement("input");
@@ -8809,6 +8816,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
     for(const control of [cardStopMode,noFlipLevel,targetSkill,targetCount]){control.disabled=enabled;control.style.opacity=enabled?"0.45":"";}
   }
   function loadCardStopTarget() {
+    loadGoalAction();goalActionHelp.hidden=goalAction.value==="save";
     syncSkillLevelStopControls();
     cardStopMode.value = readSetting("ro-helper-card-stop-mode") === "targets" ? "targets" : "level";
     noFlipSetting.hidden = cardStopMode.value === "targets";
@@ -8835,7 +8843,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
       const pause=document.querySelector("#pause:not(.hidden)");
       if(!pause || !pause.getClientRects().length || getComputedStyle(pause).visibility!=="visible")return false;
       // Leave open settings/confirmation dialogs alone. Use only the pause menu's native button.
-      if(document.querySelector("#options:not(.hidden),dialog[open],#picker:not(.hidden):not(.closing)"))return false;
+      if(document.querySelector("#options:not(.hidden),dialog[open],#picker:not(.hidden):not(.closing),#fp-confirm"))return false;
       const resume=pause.querySelector("#btn-resume");
       if(!resume || resume.disabled || !resume.getClientRects().length || getComputedStyle(resume).visibility!=="visible")return false;
       if(lastClick && now>=lastClick && now-lastClick<1000)return true;
@@ -8847,7 +8855,31 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
     return Boolean((hud || picker) && !document.body.classList.contains("in-lobby") &&
       !document.querySelector("#gameover:not(.hidden)"));
   }
+function nativeSelectionGoalsReady(skillConfigured,skillReached,chestConfigured,chestReached) {
+  return Boolean((skillConfigured||chestConfigured)&&(!skillConfigured||skillReached)&&(!chestConfigured||chestReached));
+}
+function createNativeGoalSelection() {
+  let requested=false,ownedConfirm=null,nextAttempt=0;
+  return {
+    reset(){if(requested&&document.getElementById('fp-confirm')===ownedConfirm)document.getElementById('fp-no')?.click();requested=false;ownedConfirm=null;nextAttempt=0;},
+    act(enabled,ready){
+      if(document.body.classList.contains('fp-auto')){requested=false;return 'active';}
+      if(!enabled||!ready){if(requested){if(document.getElementById('fp-confirm')===ownedConfirm)document.getElementById('fp-no')?.click();requested=false;}return document.getElementById('fp-confirm')?'manual':false;}
+      const confirm=document.getElementById('fp-confirm');
+      if(requested&&confirm){if(confirm!==ownedConfirm){requested=false;return 'manual';}const yes=document.getElementById('fp-yes');if(yes&&!yes.disabled){yes.click();requested=false;nextAttempt=Date.now()+3000;return 'pending';}return 'pending';}
+      if(confirm)return 'manual';
+      if(Date.now()<nextAttempt)return requested?'pending':'unavailable';
+      const control=document.getElementById('fp-check-auto'),row=document.getElementById('fp-row-auto');
+      if(!control||control.disabled||control.checked||!row||row.classList.contains('hidden'))return 'unavailable';
+      requested=true;nextAttempt=Date.now()+3000;control.click();
+      ownedConfirm=document.getElementById('fp-confirm');if(!ownedConfirm)requested=false;
+      return 'pending';
+    }
+  };
+}
+
   function createLevelCardStop() {
+    const nativeSelection=createNativeGoalSelection();
     const preferenceKey = "ro-hans.saveUp";
     let stopped = false;
     let ownsPreference = false;
@@ -8868,6 +8900,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
     let attemptedChestTab;
     let retrySavedChestAt = 0;
     function reset() {
+      nativeSelection.reset();
       stopped = false;
       chestCutoff = false;
       saveZeroDiscoveryChests = false;
@@ -8934,6 +8967,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
     }
     function act(picker,chest,discovery,skillTargets) {
       if (!taiwanGame) return false;
+      if(document.body.classList.contains("fp-auto")){for(const index of splitOwned)setSplit(index,false);splitOwned.clear();return Boolean(picker);}
       const levelPlan=readSkillLevelPlan();
       const byTargets = !levelPlan.enabled && cardStopMode.value === "targets";
       const threshold = levelPlan.enabled ? (levelPlan.done ? 1 : 0) : byTargets ? targetCount.valueAsNumber : noFlipLevel.valueAsNumber;
@@ -8953,7 +8987,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
         saveZeroDiscoveryChests = slots.length > 0 && slots.every(slot => slot.hasAttribute("data-item"));
       }
       const saveChest = (chestCutoff || saveZeroDiscoveryChests) && supportsSaving;
-      const savedChestStatus = saveZeroDiscoveryChests ? "寶物已滿、尋寶率 +0%，寶箱已保存" : "已達尋寶率門檻，寶箱已保存";
+      let savedChestStatus = saveZeroDiscoveryChests ? "寶物已滿、尋寶率 +0%，寶箱已保存" : "已達尋寶率門檻，寶箱已保存";
       if (!Number.isSafeInteger(threshold) || threshold < 1) stopped = false;
       if (byTargets && !stopped && Number.isSafeInteger(threshold) && threshold > 0 &&
           Number.isSafeInteger(liveTargets) && liveTargets >= threshold && document.getElementById("sv-check")) stopped = true;
@@ -8967,6 +9001,20 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
             status.textContent = "已設定本局之後不再翻牌";
           } else if (picker.querySelector("#sv-bar")) stopped = true;
         }
+      }
+      const skillConfigured=levelPlan.enabled || Number.isSafeInteger(threshold)&&threshold>0;
+      const nativeReady=nativeSelectionGoalsReady(skillConfigured,stopped,discoveryMode,chestCutoff);
+      const nativeResult=nativeSelection.act(goalAction.value==="native",nativeReady);
+      const nativeNotice=nativeResult==="unavailable"?"（遊戲尚未開放自動選，暫時保存）":"";
+      savedChestStatus+=nativeNotice;
+      if(nativeResult==="active"){
+        for(const index of splitOwned)setSplit(index,false);splitOwned.clear();
+        status.textContent="本局已由遊戲隨機自動選技能與寶箱";
+        return Boolean(picker);
+      }
+      if(nativeResult==="pending"||nativeResult==="manual"){
+        status.textContent=nativeResult==="manual"?"等待手動處理遊戲自動選確認":"目標皆已達成，啟用遊戲自動選技能與寶箱";
+        return true;
       }
       if (document.getElementById("sv-check-ch") || localStorage.getItem("ro-hans.saveLv") !== null) {
         const managesSkill = levelPlan.enabled || Number.isSafeInteger(threshold) && threshold > 0;
@@ -8988,7 +9036,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
         keep(bar);
         setSplit(0,savedSkill);
         setSplit(1,savedChest);
-        status.textContent = chest ? savedChestStatus : "已達停選門檻，技能卡已保存";
+        status.textContent = chest ? savedChestStatus : "已達技能目標，技能卡已保存"+nativeNotice;
         return true;
       }
       if (!stopped && !saveChest) { if (ownsPreference) reset(); return false; }
@@ -10995,7 +11043,7 @@ void connectCoordinates(false);
   content.style.cssText = "padding:5px;max-width:260px;max-height:calc(100vh - 64px);overflow:auto";
   const actions = document.createElement("div");
   actions.style.cssText = "display:flex;flex-direction:column;gap:6px;width:100%;box-sizing:border-box";
-  for (const control of [button, gpuSaver, ...(taiwanGame?[memorySaver,memoryCleanupButton,memoryCleanupReport,memoryStatusButton]:[]), autoLoginToggle, loginCharacterSetting, settingsTransferButton, ...(taiwanGame ? [worldBossToggle,worldBossMode,worldBossLeadRow,raidControls] : []), lootButton, mobileDrops, settings, treasureButton, share, ...(taiwanGame ? [inventoryButton,cardRecycleButton,upgradeButton,gsAdvisorButton,growthButton,targetStorageButton] : [difficultyButton]), movementToggle, gearPickupToggle, magnetIntervalSetting, collisionMode, chestMode, chestDiscoverySetting, ...(taiwanGame ? [cardStopMode,noFlipSetting,targetStop] : []), rollChoice, partyMode, rerollToggle, skillFocus.select, ...treasureFocus.map(choice => choice.select)]) {
+  for (const control of [button, gpuSaver, ...(taiwanGame?[memorySaver,memoryCleanupButton,memoryCleanupReport,memoryStatusButton]:[]), autoLoginToggle, loginCharacterSetting, settingsTransferButton, ...(taiwanGame ? [worldBossToggle,worldBossMode,worldBossLeadRow,raidControls] : []), lootButton, mobileDrops, settings, treasureButton, share, ...(taiwanGame ? [inventoryButton,cardRecycleButton,upgradeButton,gsAdvisorButton,growthButton,targetStorageButton] : [difficultyButton]), movementToggle, gearPickupToggle, magnetIntervalSetting, collisionMode, chestMode, chestDiscoverySetting, ...(taiwanGame ? [goalActionSetting,cardStopMode,noFlipSetting,targetStop] : []), rollChoice, partyMode, rerollToggle, skillFocus.select, ...treasureFocus.map(choice => choice.select)]) {
     control.style.cssText = "background:#234b96;color:white;padding:5px 7px;border-radius:5px;cursor:pointer";
     actions.append(control);
   }
@@ -11031,7 +11079,7 @@ void connectCoordinates(false);
   actions.replaceChildren(button);
   button.style.width = "100%";
   button.style.fontWeight = "bold";
-  addPanelGroup("技能／寶物選牌",[settings,treasureButton,skillFocus.select,...treasureFocus.map(choice=>choice.select),rerollToggle,...(taiwanGame?[cardStopMode,noFlipSetting,targetStop]:[])]);
+  addPanelGroup("技能／寶物選牌",[settings,treasureButton,skillFocus.select,...treasureFocus.map(choice=>choice.select),rerollToggle,...(taiwanGame?[goalActionSetting,cardStopMode,noFlipSetting,targetStop]:[])]);
   addPanelGroup("裝備／角色整理",taiwanGame?[inventoryButton,cardRecycleButton,upgradeButton,gsAdvisorButton,targetStorageButton,growthButton]:[]);
   addPanelGroup("拾取設定",[gearPickupToggle,magnetIntervalSetting,chestMode,chestDiscoverySetting]);
   addPanelGroup("移動／系統",[movementToggle,collisionMode,share,gpuSaver,...(taiwanGame?[memorySaver,memoryCleanupButton,memoryCleanupReport,memoryStatusButton]:[]),autoLoginToggle,loginCharacterSetting]);
@@ -11326,6 +11374,7 @@ void connectCoordinates(false);
     collisionMode.value = readSetting("ro-helper-collision-mode") === "always" ? "always" : "pickup";
     loadChestMode();
     loadNoFlipLevel();
+    loadGoalAction();
     loadCardStopTarget();
     rollChoice.value = readSetting("ro-helper-roll-choice") || "";
     const role = readSetting("ro-helper-party-role");
