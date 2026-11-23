@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 85.1
+// @version 85.2
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -4419,7 +4419,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V85.1 網頁控制特別版";
+  const versionName = "Gear V85.2 網頁控制特別版";
   let runtimeInvalidated = false;
   const button = document.createElement("button");
   button.type = "button";
@@ -5899,7 +5899,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
       drafts.set(displayed,readInputs());
       for (const [kind,values] of drafts) {
         writeSetting(difficultyKey(kind),JSON.stringify(values));
-        if(taiwanGame && previewStage()) localStorage.removeItem(settingKey(stageDifficultyKey(kind,previewStage(),expeditionLap.value)));
+        if(taiwanGame && previewStage()) writeSetting(stageDifficultyKey(kind,previewStage(),expeditionLap.value),"__ro_helper_default_v1__");
       }
       refreshStageDropPreview();
       status.textContent = "已儲存" + difficultyEdition + "難度，下次出發時套用";
@@ -5976,8 +5976,21 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
     ["金字塔","夢羅克金字塔"],["Pirámides de Morroc","夢羅克金字塔"],["Pyramids of Morroc","夢羅克金字塔"],
     ["失事船","失事輪"],["沉船","失事輪"],["Sunken Ship","失事輪"],["Barco hundido","失事輪"]
   ]);
+function hansEventIdentity(name) {
+  const text=String(name||'').normalize('NFKC').trim();
+  const m=text.match(/^(聖誕節|元宵燈會|元宵節|Navidad|Christmas|Feria de faroles de Louyang|Lantern Festival)\s*(?:[·・･]\s*改(\d*))?\s*(?:特殊關卡|活動關卡|Special stage|Stage especial)?$/i);
+  if(!m)return null;
+  const base=/^(?:聖誕節|Navidad|Christmas)$/i.test(m[1])?'聖誕節':'元宵燈會';
+  const lap=m[2]===undefined?1:Number(m[2]||1)+1;
+  return {base,lap,name:base+(lap>1?'・改'+(lap===2?'':lap-1):'')+'特殊關卡'};
+}
+function hansEventStagesForLap(lap) {
+  const value=Number(lap);if(!Number.isSafeInteger(value)||value<1||value>6)return [];
+  return ['聖誕節','元宵燈會'].map(name=>hansEventIdentity(name+(value>1?'・改'+(value===2?'':value-1):'')).name);
+}
+
   const stageVariantSuffix = /\s*[·・･]\s*改(\d*)(?=\s*(?:特殊關卡)?$)/u;
-  const stageGroup = name => /特殊關卡|活動|節(?:・|$)|festival|event/i.test(name) ? "特殊活動" :
+  const stageGroup = name => (hansEventIdentity(name) || /特殊關卡|活動|節(?:・|$)|festival|event/i.test(name)) ? "特殊活動" :
     /劇情|story|^普隆德拉城$/i.test(name) ? "劇情關卡" : "一般關卡";
   const stageVariantLap = name => {
     const match = name.normalize("NFKC").trim().match(stageVariantSuffix);
@@ -5989,6 +6002,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
     [...knownStages,...hansStages].find(name => card.textContent.includes(name)) || "";
   const baseExpeditionName = name => {
     const normalized = name.trim().normalize("NFKC");
+    const event=taiwanGame && hansEventIdentity(normalized);if(event)return event.name;
     const base = taiwanGame && stageGroup(normalized) !== "特殊活動" ? normalized.replace(stageVariantSuffix,"").trim() : normalized;
     return stageAliases.get(base) || base;
   };
@@ -5997,7 +6011,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
     const observed = readNames(seenStageKey(lap));
     const legacyEvents = taiwanGame ? readNames("ro-helper-seen-stages").filter(name =>
       stageGroup(name) === "特殊活動") : [];
-    const names = [...knownStages,...(taiwanGame ? hansStages : [festivalStage]),...observed,...legacyEvents];
+    const names = [...knownStages,...(taiwanGame ? [...hansStages,...hansEventStagesForLap(lap)] : [festivalStage]),...observed,...legacyEvents];
     return [...new Set(names.map(baseExpeditionName).filter(name => name && stageMatchesLap(name,lap)))];
   }
   function groupedStageChoices(names, createChoice) {
@@ -6262,10 +6276,26 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
   const difficultyAdviceButton=document.createElement("button");
   difficultyAdviceButton.type="button";difficultyAdviceButton.textContent="AI 難度建議";
   const stageDifficultyKey=(mode,stage,lap)=>"ro-helper-difficulty-stage."+mode+"."+Number(lap)+"."+encodeURIComponent(baseExpeditionName(stage));
+  function readStageDifficultyValue(mode,stage,lap){
+    const canonical=stageDifficultyKey(mode,stage,lap);
+    if(localStorage.getItem(settingKey(canonical))==="__ro_helper_default_v1__")return null;
+    const direct=readSetting(canonical);if(direct!==null&&direct!==undefined)return direct;
+    if(!hansEventIdentity(stage))return null;
+    const prefix="ro-helper-difficulty-stage."+mode+"."+Number(lap)+".";
+    const suffix="."+activeAccount;
+    for(const scoped of [true,false])for(let i=0;i<localStorage.length;i++){
+      let key=localStorage.key(i);if(!key?.startsWith(prefix)||key.endsWith(suffix)!==scoped)continue;
+      if(scoped)key=key.slice(0,-suffix.length);
+      try{const old=decodeURIComponent(key.slice(prefix.length));if(baseExpeditionName(old)===baseExpeditionName(stage)){
+        const value=readSetting(key);if(value!==null&&value!==undefined)return value;
+      }}catch{}
+    }
+    return null;
+  }
   function readStageDifficulty(mode,stage,lap){
     if(!stage)return null;
     try{
-      const value=JSON.parse(readSetting(stageDifficultyKey(mode,stage,lap))||"null");
+      const value=JSON.parse(readStageDifficultyValue(mode,stage,lap)||"null");
       if(!value || difficultyFields.some(([key])=>!Number.isFinite(value[key]) || value[key]<=0))return null;
       return value;
     }catch{return null;}
@@ -6351,7 +6381,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
       writeSetting(stageDifficultyKey(context.mode,context.stage,context.lap),JSON.stringify(snapshot.recommended.values));
       refreshStageDropPreview();feedback.textContent="已儲存，僅在此關卡、此周目單人出發時套用；其他關卡沿用各自設定。";
     };
-    clear.onclick=()=>{if(context.account!==activeAccount)return;localStorage.removeItem(settingKey(stageDifficultyKey(context.mode,context.stage,context.lap)));refreshStageDropPreview();feedback.textContent="已移除此關專用難度，恢復使用一般難度設定。";};
+    clear.onclick=()=>{if(context.account!==activeAccount)return;writeSetting(stageDifficultyKey(context.mode,context.stage,context.lap),"__ro_helper_default_v1__");refreshStageDropPreview();feedback.textContent="已移除此關專用難度，恢復使用一般難度設定。";};
     close.onclick=()=>dialog.close();close.style.cssText="padding:8px 24px";
     scroll.append(title,objective,safety,hint,analyze,result,apply,clear,feedback);
     footer.append(close);dialog.append(scroll,footer);document.body.append(dialog);dialog.showModal();
