@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 85.0
+// @version 85.1
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -4419,7 +4419,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V85.0 網頁控制特別版";
+  const versionName = "Gear V85.1 網頁控制特別版";
   let runtimeInvalidated = false;
   const button = document.createElement("button");
   button.type = "button";
@@ -4826,10 +4826,8 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
     updateMovementToggle();
     if (!autoMove) window.__roMenuHelper?.releaseMovement();
   });
-  let forceGearPickup = readSetting("ro-helper-force-gear") === "on";
-  const gearPickupToggle = document.createElement("select");
-  gearPickupToggle.setAttribute("aria-label","優先撿取模式");
-  gearPickupToggle.append(new Option("優先撿取：關","off"),new Option("優先撿取：磁鐵 → 裝備／卡片","priority"),new Option("優先撿取：定時撿磁鐵","timed"));
+  let forceGearPickup = true;
+  const gearPickupToggle = {value:"priority"};
   const magnetIntervalSetting = document.createElement("label");
   magnetIntervalSetting.append("每 ");
   const magnetInterval = document.createElement("input");
@@ -4881,20 +4879,14 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
     return due;
   }
   const updateGearPickupToggle = () => {
-    gearPickupToggle.value = readSetting("ro-helper-pickup-mode") === "timed" ? "timed" : forceGearPickup ? "priority" : "off";
+    forceGearPickup = true;
+    gearPickupToggle.value = "priority";
     magnetInterval.value = String(readMagnetMinutes());
     magnetIntervalSetting.hidden = gearPickupToggle.value !== "timed";
     document.documentElement.dataset.roHelperTimedMagnet = gearPickupToggle.value === "timed" ? "on" : "off";
     document.documentElement.dataset.roHelperPriorityMagnet = forceGearPickup ? "on" : "off";
   };
   updateGearPickupToggle();
-  gearPickupToggle.addEventListener("change", event => {
-    event.stopPropagation();
-    forceGearPickup = gearPickupToggle.value === "priority";
-    writeSetting("ro-helper-force-gear",forceGearPickup ? "on" : "off");
-    writeSetting("ro-helper-pickup-mode",gearPickupToggle.value);
-    updateGearPickupToggle();
-  });
   magnetInterval.addEventListener("change",() => {
     const value = Number(magnetInterval.value);
     writeSetting("ro-helper-magnet-minutes",String(Number.isFinite(value) && value >= 0.1 ? value : 1));
@@ -11043,7 +11035,7 @@ void connectCoordinates(false);
   content.style.cssText = "padding:5px;max-width:260px;max-height:calc(100vh - 64px);overflow:auto";
   const actions = document.createElement("div");
   actions.style.cssText = "display:flex;flex-direction:column;gap:6px;width:100%;box-sizing:border-box";
-  for (const control of [button, gpuSaver, ...(taiwanGame?[memorySaver,memoryCleanupButton,memoryCleanupReport,memoryStatusButton]:[]), autoLoginToggle, loginCharacterSetting, settingsTransferButton, ...(taiwanGame ? [worldBossToggle,worldBossMode,worldBossLeadRow,raidControls] : []), lootButton, mobileDrops, settings, treasureButton, share, ...(taiwanGame ? [inventoryButton,cardRecycleButton,upgradeButton,gsAdvisorButton,growthButton,targetStorageButton] : [difficultyButton]), movementToggle, gearPickupToggle, magnetIntervalSetting, collisionMode, chestMode, chestDiscoverySetting, ...(taiwanGame ? [goalActionSetting,cardStopMode,noFlipSetting,targetStop] : []), rollChoice, partyMode, rerollToggle, skillFocus.select, ...treasureFocus.map(choice => choice.select)]) {
+  for (const control of [button, gpuSaver, ...(taiwanGame?[memorySaver,memoryCleanupButton,memoryCleanupReport,memoryStatusButton]:[]), autoLoginToggle, loginCharacterSetting, settingsTransferButton, ...(taiwanGame ? [worldBossToggle,worldBossMode,worldBossLeadRow,raidControls] : []), lootButton, mobileDrops, settings, treasureButton, share, ...(taiwanGame ? [inventoryButton,cardRecycleButton,upgradeButton,gsAdvisorButton,growthButton,targetStorageButton] : [difficultyButton]), movementToggle, collisionMode, chestMode, chestDiscoverySetting, ...(taiwanGame ? [goalActionSetting,cardStopMode,noFlipSetting,targetStop] : []), rollChoice, partyMode, rerollToggle, skillFocus.select, ...treasureFocus.map(choice => choice.select)]) {
     control.style.cssText = "background:#234b96;color:white;padding:5px 7px;border-radius:5px;cursor:pointer";
     actions.append(control);
   }
@@ -11079,9 +11071,9 @@ void connectCoordinates(false);
   actions.replaceChildren(button);
   button.style.width = "100%";
   button.style.fontWeight = "bold";
-  addPanelGroup("技能／寶物選牌",[settings,treasureButton,skillFocus.select,...treasureFocus.map(choice=>choice.select),rerollToggle,...(taiwanGame?[goalActionSetting,cardStopMode,noFlipSetting,targetStop]:[])]);
+  addPanelGroup("技能／寶物選牌",[settings,treasureButton,skillFocus.select,...treasureFocus.map(choice=>choice.select),rerollToggle,chestMode,chestDiscoverySetting,...(taiwanGame?[goalActionSetting,cardStopMode,noFlipSetting,targetStop]:[])]);
   addPanelGroup("裝備／角色整理",taiwanGame?[inventoryButton,cardRecycleButton,upgradeButton,gsAdvisorButton,targetStorageButton,growthButton]:[]);
-  addPanelGroup("拾取設定",[gearPickupToggle,magnetIntervalSetting,chestMode,chestDiscoverySetting]);
+
   addPanelGroup("移動／系統",[movementToggle,collisionMode,share,gpuSaver,...(taiwanGame?[memorySaver,memoryCleanupButton,memoryCleanupReport,memoryStatusButton]:[]),autoLoginToggle,loginCharacterSetting]);
   addPanelGroup("組隊／副本／世界王",[partyMode,rollChoice,...(taiwanGame?[worldBossToggle,worldBossMode,worldBossLeadRow,raidControls]:[])]);
   addPanelGroup("掉落／設定備份",[lootButton,mobileDrops,settingsTransferButton]);
@@ -11368,7 +11360,7 @@ void connectCoordinates(false);
     refreshGpuSaver(false);
     loadStageSettings();
     autoMove = readSetting("ro-helper-auto-move") !== "off";
-    forceGearPickup = readSetting("ro-helper-force-gear") === "on";
+    forceGearPickup = true;
     magnetSchedule = {last:0,time:null,token:document.documentElement.dataset.roHelperMagnetCollected || ""};
     autoReroll = readSetting("ro-helper-auto-reroll") !== "off";
     collisionMode.value = readSetting("ro-helper-collision-mode") === "always" ? "always" : "pickup";
