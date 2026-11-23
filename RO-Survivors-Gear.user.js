@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 87.3
+// @version 87.4
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -154,7 +154,6 @@ function planRaidObjective(s,definition,player,targets,now,spots) {
     const target=candidates.reduce((best,q)=>clearance(q)>clearance(best)?q:best,candidates[0]);
     return {kind:'mark',label:'副本｜死神標記：遠離隊友',target,marked,players,mark,stay:clearance(player)>mark.r+40};
   }
-  if(!s.zi&&s.next?.at)return {kind:'next',label:'副本｜通過已開啟的門前往下一區',target:point(s.next.at),stay:false,marked,players,mark};
   const zi=s.zi,zone=definition.zones[s.zone],hold=zi?.hold;
   if(hold&&!zi.boss&&zi.z===s.zone){
     const each=!!hold.each,complete=each?(hold.accs||[]).map(a=>a>=hold.secs):[hold.acc>=hold.secs];
@@ -173,6 +172,9 @@ function planRaidObjective(s,definition,player,targets,now,spots) {
   const available=alive.filter(t=>raidTraitMultiplier(t.kind==='boss'?s.trait?.set:t.traits,lane)>0);
   const priority=t=>t.kind==='src'?0:t.kind==='obj'?1:t.kind==='elite'||t.kind==='mid'?2:t.kind==='boss'?4:3;
   const sorted=available.sort((a,b)=>priority(a)-priority(b)||distance(a)-distance(b));
+  const objective=sorted.find(t=>t.kind==='obj');
+  if(objective)return {kind:'obj',label:'副本｜優先完成分區任務物件',target:objective,radius:130,stay:distance(objective)<=130,marked,players,mark};
+  if(s.next?.at)return {kind:'next',label:'副本｜通過已開啟的門前往下一區',target:point(s.next.at),stay:false,marked,players,mark};
   const source=sorted.find(t=>t.kind==='src');
   if(source)return {kind:'source',label:'副本｜優先處理補血源',target:source,radius:130,stay:distance(source)<=130,marked,players,mark};
   const boss=alive.find(t=>t.kind==='boss'),multiplier=raidTraitMultiplier(s.trait?.set,lane),rotating=Number.isFinite(s.trait?.until)&&s.trait.until>now,blocked=boss&&(s.shield>now||multiplier<=0||(rotating&&multiplier<=.15));
@@ -180,7 +182,6 @@ function planRaidObjective(s,definition,player,targets,now,spots) {
   if(chosen)return {kind:chosen.kind,label:chosen.kind==='obj'?'副本｜優先拆物件／蛋／蠅巢':chosen.kind==='boss'?'副本｜攻擊首領並躲招':'副本｜清除分區精英／中王',target:chosen,radius:130,stay:distance(chosen)<=130,marked,players,mark};
   if(blocked){const d=distance(boss),dx=(player.x-boss.x)/(d||1),dy=(player.y-boss.y)/(d||1);return {kind:'shield',label:s.shield>now?'副本｜護盾期間退開躲招':'副本｜目前型態抗本職業，等待換型',target:{x:boss.x+(d?dx:1)*650,y:boss.y+(d?dy:0)*650},stay:d>=600,marked,players,mark};}
   if(zi&&zi.need>0&&zi.kills<zi.need)return {kind:'kills',label:'副本｜清怪達成分區擊殺數',target:null,stay:false,marked,players,mark};
-  if(!zi&&s.next?.at)return {kind:'next',label:'副本｜通過已開啟的門前往下一區',target:point(s.next.at),stay:false,marked,players,mark};
   return {kind:'wait',label:'副本｜等待分區目標與隊友',target:null,stay:true,marked,players,mark};
 }
 
@@ -234,6 +235,13 @@ function installRaidMechanics(book) {
       cache.at=now;cache.result=result;
       if(!s.me||!s.seen||now-s.seen>20000){result.ready=false;result.label='副本｜機制資料中斷，等待連線恢復';return result;}
       const player={x:game.player.x,y:game.player.y};
+      // A door event can be followed by updated zone tasks before the player crosses.
+      // Retain the transition until the native walk map confirms arrival in the new room.
+      if(s.next&&s.zi?.z===s.next.zone&&cache.layout){
+        const {w,h,labels}=cache.layout,cx=Math.floor(player.x/32),cy=Math.floor(player.y/32);
+        const label=definition.zones[s.zone]?.reuse??s.zone;
+        if(cx>=0&&cy>=0&&cx<w&&cy<h&&labels[cy*w+cx]===label)s.next=null;
+      }
       const pathTo=target=>{
         if(!target||![target.x,target.y].every(Number.isFinite)||!game.walk?.pathTo)return null;
         const end=game.walk.nearestWalkable?.(target.x,target.y)||[target.x,target.y];
@@ -4428,7 +4436,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V87.3 網頁控制特別版";
+  const versionName = "Gear V87.4 網頁控制特別版";
   let automationMode="normal";
   const raidCompletion={entered:false,finished:false};
   const compactRaidToggle=document.createElement("button");compactRaidToggle.type="button";
