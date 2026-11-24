@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 91.0
+// @version 92.0
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -415,6 +415,11 @@ function installRaidMechanics(book) {
     }
   });
   Object.defineProperty = watchDefinition;
+  document.addEventListener('ro-helper-read-friends',()=>{
+    try{const list=lobby?.friends?.list,view=lobby?.party?.view;
+      document.documentElement.dataset.roHelperFriends=JSON.stringify({ready:!!lobby?.friends&&!!lobby?.party,friends:(Array.isArray(list)?list:[]).slice(0,500).filter(f=>typeof f.name==='string').map(f=>({name:f.name,online:f.on>0,channel:f.on>0?f.on:0,lobby:!!f.lb,party:!!f.party})),party:view?{leader:view.leader===view.me,members:(view.members||[]).slice(0,30).map(m=>m.name)}:null});
+    }catch{delete document.documentElement.dataset.roHelperFriends;}
+  });
   document.addEventListener("ro-helper-lobby-npc", event => {
     const npcId = event.detail;
     const dataset = document.documentElement.dataset;
@@ -4456,7 +4461,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V91.0 網頁控制特別版";
+  const versionName = "Gear V92.0 網頁控制特別版";
   let automationMode="normal";
   const raidCompletion={entered:false,finished:false};
   const compactRaidToggle=document.createElement("button");compactRaidToggle.type="button";
@@ -4655,14 +4660,51 @@ function raidCompletionTransition(state,active,evidence){
   raidPresetRole.append(new Option('預先組隊：關（快速加入）','off'),new Option('我是隊長：邀請固定名單','leader'),new Option('我是隊員：等待指定邀請','member'));
   const raidPresetNames=document.createElement('textarea');raidPresetNames.rows=4;raidPresetNames.maxLength=2048;raidPresetNames.style.cssText='width:100%;box-sizing:border-box';raidPresetNames.placeholder='固定隊友／可同意的邀請人，每行一個角色名稱';raidPresetNames.setAttribute('aria-label','固定隊友與邀請人名單');
   const raidPresetAccept=document.createElement('input');raidPresetAccept.type='checkbox';const raidPresetAcceptRow=document.createElement('label');raidPresetAcceptRow.style.display='block';raidPresetAcceptRow.append(raidPresetAccept,' 自動同意名單內的副本邀請');
+  const raidFriendsButton=document.createElement('button');raidFriendsButton.type='button';raidFriendsButton.textContent='讀取好友／勾選隊員';raidFriendsButton.onclick=openRaidFriendsPicker;
   const raidPresetFill=document.createElement('input');raidPresetFill.type='checkbox';const raidPresetFillRow=document.createElement('label');raidPresetFillRow.style.display='block';raidPresetFillRow.append(raidPresetFill,' 名單到齊後公開招募補人');
-  const raidPresetHelp=document.createElement('small');raidPresetHelp.style.display='block';raidPresetHelp.textContent='隊長先開私人團邀請固定名單；到齊後可公開補人，至少6人且準備後出發。隊員等待名單內邀請；兩種角色都可自動同意。未指定副本時，隊長選目前可打的最高副本。';
-  raidPresetBox.append(raidPresetTitle,raidPresetRole,raidPresetNames,raidPresetAcceptRow,raidPresetFillRow,raidPresetHelp);
+  const raidPresetHelp=document.createElement('small');raidPresetHelp.style.display='block';raidPresetHelp.textContent='隊長可讀取好友勾選名單，先邀一般隊伍，再開私人副本團；每場副本後若隊伍消失會重新邀請。到齊後可公開補人，至少6人且準備後出發。隊員等待名單內邀請；兩種角色都可自動同意。未指定副本時，隊長選目前可打的最高副本。';
+  raidPresetBox.append(raidPresetTitle,raidPresetRole,raidFriendsButton,raidPresetNames,raidPresetAcceptRow,raidPresetFillRow,raidPresetHelp);
   const raidPreset=()=>normalizeRaidPreset(readSetting('ro-helper-raid-preset'));
-  const loadRaidPreset=()=>{const p=raidPreset(),signature=JSON.stringify(p);if(signature!==raidPresetSignature){raidPresetSignature=signature;raidPresetGroupId=null;raidPresetInvited.clear();}raidPresetRole.value=p.role;raidPresetNames.value=p.names.join('\n');raidPresetAccept.checked=p.accept;raidPresetFill.checked=p.fill;raidPresetFillRow.hidden=p.role!=="leader";};
+  const loadRaidPreset=()=>{const p=raidPreset(),signature=JSON.stringify(p);if(signature!==raidPresetSignature){raidPresetSignature=signature;raidPresetGroupId=null;raidPresetInvited.clear();raidPartyInvited.clear();raidOrdinaryPartyPresent=false;}raidPresetRole.value=p.role;raidPresetNames.value=p.names.join('\n');raidPresetAccept.checked=p.accept;raidPresetFill.checked=p.fill;raidPresetFillRow.hidden=p.role!=="leader";};
+  let raidFriendsOwned=false,raidOrdinaryPartyPresent=false;const raidPartyInvited=new Map();
   let raidPresetGroupId=null,raidPresetSignature="";const raidPresetInvited=new Map();
   const saveRaidPreset=()=>{const p=normalizeRaidPreset({role:raidPresetRole.value,names:raidPresetNames.value,accept:raidPresetAccept.checked,fill:raidPresetFill.checked});writeSetting('ro-helper-raid-preset',JSON.stringify(p));raidPresetGroupId=null;raidPresetInvited.clear();loadRaidPreset();raidNextAction=0;};
   for(const el of [raidPresetRole,raidPresetNames,raidPresetAccept,raidPresetFill])el.addEventListener('change',saveRaidPreset);
+
+  function readRaidFriends(){
+    document.dispatchEvent(new Event('ro-helper-read-friends'));
+    try{return JSON.parse(document.documentElement.dataset.roHelperFriends||'null');}catch{return null;}
+  }
+  function openRaidFriendsPicker(){
+    if(document.getElementById('ro-helper-raid-friends'))return;
+    const account=activeAccount,selected=new Set(raidPreset().names),dialog=document.createElement('dialog');dialog.id='ro-helper-raid-friends';dialog.style.cssText='width:min(480px,94vw)';
+    const title=document.createElement('strong');title.textContent='選擇副本隊員好友';
+    const search=document.createElement('input');search.type='search';search.placeholder='搜尋好友名稱';search.style.width='100%';
+    const list=document.createElement('div');list.style.cssText='max-height:50vh;overflow:auto';const note=document.createElement('small');note.textContent='套用後，啟動副本隊長模式會自動邀請一般隊伍；每場副本後隊伍消失會重新邀請。';
+    let friends=[];const render=()=>{list.replaceChildren();for(const f of friends.filter(f=>f.name.toLowerCase().includes(search.value.trim().toLowerCase()))){const row=document.createElement('label'),box=document.createElement('input');row.style.display='block';box.type='checkbox';box.checked=selected.has(f.name);box.onchange=()=>{if(box.checked){if(selected.size>=29){box.checked=false;note.textContent='最多選擇29位固定隊友';return;}selected.add(f.name);}else selected.delete(f.name);};row.append(box,' '+f.name+' · '+(f.online?'頻道 '+f.channel:'離線／戰鬥中')+(f.party?' · 已有隊伍':''));list.append(row);}if(!friends.length)list.textContent='尚未讀到好友；請先進入廣場，再按重新讀取。';};
+    const refresh=document.createElement('button');refresh.type='button';refresh.textContent='重新讀取好友';refresh.onclick=()=>{const data=readRaidFriends();friends=Array.isArray(data?.friends)?data.friends:[];render();};
+    const save=document.createElement('button');save.type='button';save.textContent='套用隊員名單';save.onclick=()=>{if(activeAccount!==account){dialog.close();dialog.remove();return;}raidPresetNames.value=[...selected].join('\n');saveRaidPreset();dialog.close();dialog.remove();};
+    const close=document.createElement('button');close.type='button';close.textContent='取消';close.onclick=()=>{dialog.close();dialog.remove();};dialog.oncancel=()=>dialog.remove();search.oninput=render;dialog.append(title,search,refresh,list,note,save,close);document.body.append(dialog);dialog.showModal();refresh.click();
+  }
+  function handleRaidLeaderParty(preset,click,now){
+    if(preset.role!=='leader'||!document.body.classList.contains('in-lobby')||raidActive())return false;
+    if(document.querySelector('#ro-helper-raid-friends[open]'))return true;
+    const friends=document.getElementById('friends');
+    if(raidFriendsOwned&&friends&&!friends.classList.contains('hidden')){if(click(document.getElementById('fr-close')))raidFriendsOwned=false;return true;}
+    const data=readRaidFriends();if(!data?.ready)return false;
+    if(raidOrdinaryPartyPresent&&!data.party){raidPartyInvited.clear();}raidOrdinaryPartyPresent=!!data.party;
+    if(data.party&&(!data.party.leader||data.party.members.length>=8))return false;
+    const members=new Set(data.party?.members||[]),candidate=preset.names.find(name=>!members.has(name)&&now-(raidPartyInvited.get(name)??-Infinity)>=30000&&data.friends.some(f=>f.name===name&&f.online&&f.lobby&&!f.party));
+    if(!candidate)return false;
+    if(document.querySelector('.overlay:not(.hidden),dialog[open]'))return false;
+    // Use the game's own friend invite button, including cross-lobby handling.
+    document.getElementById('lobby-friends')?.click();
+    const invite=[...document.querySelectorAll('#fr-body [data-act="invite"]')].find(b=>b.dataset.name===candidate);
+    if(!invite||invite.disabled){document.getElementById('fr-close')?.click();raidPartyInvited.set(candidate,now);return false;}
+    if(click(invite)){raidPartyInvited.set(candidate,now);raidFriendsOwned=true;status.textContent='副本隊長｜已邀請 '+candidate+' 加入隊伍';return true;}
+    document.getElementById('fr-close')?.click();return false;
+  }
+
   function readRaidGroupSnapshot(){try{return JSON.parse(document.documentElement.dataset.roHelperRaidGroup||'null');}catch{return null;}}
   function handleRaidPresetGroup(snapshot,preset,click,now){
     const group=snapshot?.group;
@@ -4805,6 +4847,7 @@ function raidGroupPanelAction(snapshot,preset,now) {
         status.textContent='預先組隊｜等待同意固定名單的邀請';return true;
       }
     }
+    if(handleRaidLeaderParty(preset,click,now))return true;
     if(handleRaidPostCleanup())return true;
     const raidReturn=document.getElementById("rd-back");
     if(shown(raidReturn)){click(raidReturn);status.textContent="副本｜返回尚在進行的副本";return true;}
