@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 90.0
+// @version 91.0
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -4456,7 +4456,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V90.0 網頁控制特別版";
+  const versionName = "Gear V91.0 網頁控制特別版";
   let automationMode="normal";
   const raidCompletion={entered:false,finished:false};
   const compactRaidToggle=document.createElement("button");compactRaidToggle.type="button";
@@ -5870,7 +5870,7 @@ function raidGroupPanelAction(snapshot,preset,now) {
       const showHint = () => {
         categoryBox.hidden=treasureMode.value!=="category";
         hint.textContent = treasureMode.value === "category" ? "先比類別順位；同類別再比下方名稱順位與稀有度。有命中類別就直接選，不會為了更前面的類別反覆重抽。所選類別都未出現時才依自動重抽設定處理。" : treasureMode.value === "discovery"
-          ? "第一順位寶物出現時先取得一次；已持有後依淨增加的尋寶率選取。沒有正增量時先重抽，再按備選順位。寶物槽全滿且尋寶率 +0% 時保存寶箱。"
+          ? "第一順位寶物出現時先取得一次；已持有後依淨增加的尋寶率選取。沒有正增量時先重抽，再按備選順位。寶物槽全滿且尋寶率 +0% 時直接啟用遊戲自動選技能與寶箱，不等待技能停選目標；遊戲不支援時暫時保存。"
           : "優先選順位最高的寶物。全部未出現時，才依自動重抽設定處理。";
       };
       treasureMode.addEventListener("change",showHint);
@@ -9138,8 +9138,8 @@ function hansEventStagesForLap(lap) {
     return Boolean((hud || picker) && !document.body.classList.contains("in-lobby") &&
       !document.querySelector("#gameover:not(.hidden)"));
   }
-function nativeSelectionGoalsReady(skillConfigured,skillReached,chestConfigured,chestReached) {
-  return Boolean((skillConfigured||chestConfigured)&&(!skillConfigured||skillReached)&&(!chestConfigured||chestReached));
+function nativeSelectionGoalsReady(skillConfigured,skillReached,chestConfigured,chestReached,zeroDiscoveryFull=false) {
+  return Boolean(zeroDiscoveryFull||((skillConfigured||chestConfigured)&&(!skillConfigured||skillReached)&&(!chestConfigured||chestReached)));
 }
 function createNativeGoalSelection() {
   let requested=false,ownedConfirm=null,nextAttempt=0;
@@ -9264,13 +9264,13 @@ function createNativeGoalSelection() {
       const canCollect = chestMode.value === "collect" || discoveryMode;
       const supportsSaving = Boolean(document.getElementById("sv-check"));
       const prioritizeDiscovery = canCollect && supportsSaving && discoveryTreasureMode();
-      if (!prioritizeDiscovery) saveZeroDiscoveryChests = false;
-      else if (!saveZeroDiscoveryChests && discovery === 0) {
+      saveZeroDiscoveryChests = false;
+      if (prioritizeDiscovery && discovery === 0) {
         const slots = [...document.querySelectorAll("#runitems .run-slot")];
         saveZeroDiscoveryChests = slots.length > 0 && slots.every(slot => slot.hasAttribute("data-item"));
       }
       const saveChest = (chestCutoff || saveZeroDiscoveryChests) && supportsSaving;
-      let savedChestStatus = saveZeroDiscoveryChests ? "寶物已滿、尋寶率 +0%，寶箱已保存" : "已達尋寶率門檻，寶箱已保存";
+      let savedChestStatus = saveZeroDiscoveryChests ? "寶物已滿、尋寶率 +0%，等待遊戲自動選；暫時保存寶箱" : "已達尋寶率門檻，寶箱已保存";
       if (!Number.isSafeInteger(threshold) || threshold < 1) stopped = false;
       if (byTargets && !stopped && Number.isSafeInteger(threshold) && threshold > 0 &&
           Number.isSafeInteger(liveTargets) && liveTargets >= threshold && document.getElementById("sv-check")) stopped = true;
@@ -9286,8 +9286,8 @@ function createNativeGoalSelection() {
         }
       }
       const skillConfigured=levelPlan.enabled || Number.isSafeInteger(threshold)&&threshold>0;
-      const nativeReady=nativeSelectionGoalsReady(skillConfigured,stopped,discoveryMode,chestCutoff);
-      const nativeResult=nativeSelection.act(goalAction.value==="native",nativeReady);
+      const nativeReady=nativeSelectionGoalsReady(skillConfigured,stopped,discoveryMode,chestCutoff,saveZeroDiscoveryChests);
+      const nativeResult=nativeSelection.act(saveZeroDiscoveryChests || goalAction.value==="native",nativeReady);
       const nativeNotice=nativeResult==="unavailable"?"（遊戲尚未開放自動選，暫時保存）":"";
       savedChestStatus+=nativeNotice;
       if(nativeResult==="active"){
@@ -9296,7 +9296,7 @@ function createNativeGoalSelection() {
         return Boolean(picker);
       }
       if(nativeResult==="pending"||nativeResult==="manual"){
-        status.textContent=nativeResult==="manual"?"等待手動處理遊戲自動選確認":"目標皆已達成，啟用遊戲自動選技能與寶箱";
+        status.textContent=nativeResult==="manual"?"等待手動處理遊戲自動選確認":saveZeroDiscoveryChests?"寶物已滿、尋寶率 +0%，啟用遊戲自動選技能與寶箱":"目標皆已達成，啟用遊戲自動選技能與寶箱";
         return true;
       }
       if (document.getElementById("sv-check-ch") || localStorage.getItem("ro-hans.saveLv") !== null) {
