@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 92.7
+// @version 92.8
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -190,7 +190,8 @@ function planRaidObjective(s,definition,player,targets,now,spots) {
   const source=sorted.find(t=>t.kind==='src');
   if(source)return {kind:'source',label:'副本｜優先處理補血源',target:source,radius:130,stay:distance(source)<=130,marked,players,mark};
   const boss=alive.find(t=>t.kind==='boss'),blocked=boss&&s.shield>now;
-  const chosen=sorted.find(t=>!(t.kind==='boss'&&blocked)&&!(t.kind==='obj'&&objectIds&&!objectIds.has(String(t.id))));
+  const bossPhase=!!zi?.boss||!!definition.zones[s.zone]?.boss;
+  const chosen=bossPhase&&boss&&!blocked?boss:sorted.find(t=>!(t.kind==='boss'&&blocked)&&!(t.kind==='obj'&&objectIds&&!objectIds.has(String(t.id))));
   if(chosen)return {kind:chosen.kind,label:chosen.kind==='obj'?'副本｜優先拆物件／蛋／蠅巢':chosen.kind==='boss'?'副本｜攻擊首領並躲招':'副本｜清除分區精英／中王',target:chosen,radius:130,stay:distance(chosen)<=130,marked,players,mark};
   if(blocked){const d=distance(boss),dx=(player.x-boss.x)/(d||1),dy=(player.y-boss.y)/(d||1);return {kind:'shield',label:'副本｜護盾期間退開躲招',target:{x:boss.x+(d?dx:1)*650,y:boss.y+(d?dy:0)*650},stay:d>=600,marked,players,mark};}
   return {kind:'wait',label:'副本｜等待分區目標與隊友',target:null,stay:true,marked,players,mark};
@@ -285,11 +286,12 @@ function installRaidMechanics(book) {
         if(!last||Math.hypot(last.x-target.x,last.y-target.y)>tolerance||!legs[0]?.length)return null;
         return legs[0].slice();
       };
-      const entityById=new Map((game.enemies||[]).filter(e=>!e.dead&&e.roT).map(e=>[String(e.roT),e]));
+      const entityById=new Map((game.enemies||[]).filter(e=>!e.dead&&!e.removed&&!(e.hiddenUntil>game.time)&&e.roT).map(e=>[String(e.roT),e]));
       cache.reachable ??= new Map();
       const reachable=t=>{const key=t.id+':'+Math.floor(t.x/32)+','+Math.floor(t.y/32)+':'+Math.floor(player.x/96)+','+Math.floor(player.y/96),old=cache.reachable.get(key);if(old&&now-old.at<800)return old.ok;
         const ok=!!pathTo(t);if(cache.reachable.size>=48)cache.reachable.delete(cache.reachable.keys().next().value);cache.reachable.set(key,{at:now,ok});return ok;};
       const targetInZone=t=>{
+        if(t.kind==='boss'&&(s.zi?.boss||definition.zones[s.zone]?.boss))return true;
         if(!s.zi||!cache.layout)return true;
         const entity=entityById.get(t.id),cx=Math.floor((entity?.x??(t.at[0]+.5)*32)/32),cy=Math.floor((entity?.y??(t.at[1]+.5)*32)/32),{w,h,labels}=cache.layout,lab=definition.zones[s.zone]?.reuse??s.zone;
         if(cx<0||cy<0||cx>=w||cy>=h)return false;const own=labels[cy*w+cx];
@@ -306,7 +308,7 @@ function installRaidMechanics(book) {
       const tracked=new Map(s.targets);
       for(const [id,e] of [...entityById].slice(0,128))if(!tracked.has(id)){
         const object=s.zi?.objs?.find(row=>String(row[0])===id),elite=s.zi?.elites?.find(row=>String(row[0])===id),mid=s.zi?.mids?.find(row=>String(row[0])===id),task=object||elite||mid;
-        tracked.set(id,{id,alive:task?task[1]:true,kind:object?'obj':elite?'elite':mid?'mid':'native',at:[e.x/32-.5,e.y/32-.5]});
+        tracked.set(id,{id,alive:task?task[1]:true,kind:id==='boss'?'boss':object?'obj':elite?'elite':mid?'mid':'native',at:[e.x/32-.5,e.y/32-.5]});
       }
       const priority=t=>t.kind==='obj'?0:t.kind==='src'?1:2;
       const targets=[...tracked.values()].filter(t=>t.alive&&t.at&&targetInZone(t)).map(t=>{const e=entityById.get(t.id);return {...t,x:e?.x??(t.at[0]+.5)*32,y:e?.y??(t.at[1]+.5)*32};})
@@ -4528,7 +4530,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V92.7 網頁控制特別版";
+  const versionName = "Gear V92.8 網頁控制特別版";
   let automationMode="normal";
   const raidCompletion={entered:false,finished:false};
   const compactRaidToggle=document.createElement("button");compactRaidToggle.type="button";
