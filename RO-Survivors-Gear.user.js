@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 98.0
+// @version 98.1
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -4640,7 +4640,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V98.0 網頁控制特別版";
+  const versionName = "Gear V98.1 網頁控制特別版";
   let automationMode="normal";
   const raidCompletion={entered:false,finished:false};
   let raidExitAfterDone=false,raidChecklistAfter=0,raidChecklistAskedAt=0;
@@ -6649,6 +6649,13 @@ function hansEventStagesForLap(lap) {
       if (action) return action;
     }
     return null;
+  }
+  function eligibleSkillBanishNames(names,config,plan,priorities){
+    return names.filter(name=>{
+      if(!config)return true;
+      const limited=(config.names||priorities).some((goal,index)=>Number(config.targets?.[index])>0&&skillMatches(goal,name));
+      return !limited||(plan.reached||[]).some(goal=>skillMatches(goal,name));
+    });
   }
   function findSkillBanish(picker, names, basic, visible, used, boltsOnly, protectedFocus = "") {
     if (!names.length && !basic && !boltsOnly) return null;
@@ -11439,6 +11446,7 @@ if (cards[0] !== pickerFirstCard) {
   attempts = 0;
 }
 if (!cards.length || Date.now() < Math.max(pickerReadyAt, nextMenuAt)) return;
+const offeredCardCount=cards.length;
 const skillPlan=chest?{enabled:false}:readSkillLevelPlan();
 if(skillPlan.enabled && skillPlan.reached?.length)cards=cards.filter(card=>!skillPlan.reached.some(name=>skillMatches(name,skillCardName(card))));
 const planNames=skillPlan.order==="priority"?[skillPlan.next]:(skillPlan.pending||[skillPlan.next]);
@@ -11450,7 +11458,7 @@ const legacyTreasureName=e=>label(e).split(/\n/).map(t=>t.trim()).find(t=>t&&!/^
 const treasureName = card => treasureCardName(card,card.querySelector(".pk-name") ? "" : legacyTreasureName(card));if(chest){const seen=[...new Set([...treasureList(),...cards.map(e=>normalizeTreasure(treasureName(e))).filter(Boolean)])];writeSetting("ro-helper-treasures",JSON.stringify(seen))}else{const job=activeSkillJob();if(job?.id){const key="ro-helper-seen-skills-"+job.id;const basic=cards.map(skillCardName).filter(isBasicAttack);if(basic.length)writeSetting(key,JSON.stringify([...new Set([...readNames(key),...basic])]))}}if (!chest) {
   const picker = document.querySelector("#picker:not(.hidden):not(.closing)");
   const levelGoals=skillPlan.enabled ? skillLevelConfig() : null;
-  const eligibleBanish=banishSkills().filter(name=>!levelGoals || !(levelGoals.names || skills()).some((goal,index)=>Number(levelGoals.targets?.[index])>0 && skillMatches(goal,name)));
+  const eligibleBanish=eligibleSkillBanishNames(banishSkills(),levelGoals,skillPlan,skills());
   const banish = findSkillBanish(picker, eligibleBanish, banishBasic(), visible, usedBanish, boltsOnly, boltsOnly ? "" : focusSkill());
   if (banish) {
     usedBanish.add(banish.button);
@@ -11511,7 +11519,7 @@ else if (boltsOnly) {
   : skillMatches(name, skillCardName(card)) || label(card).includes(name))).find(Boolean);
 }
 if ((discoveryModeForTreasure ? !firstDiscoveryChoice && rankedDiscovery.length === 0 : autoReroll && (categoryModeForTreasure || boltsOnly || priorities.length) && !preferred) &&
-    !planChoice && cards.length && !elementalChoice && !startingChoice && !sameSkill) {
+    !planChoice && offeredCardCount && !elementalChoice && !startingChoice && !sameSkill) {
   const picker = document.querySelector("#picker:not(.hidden):not(.closing)");
   const reroll = availableReroll(picker, visible, usedRerolls, chest);
   if (reroll) {
@@ -11527,7 +11535,7 @@ const card = planChoice || (boltsOnly ? elementalChoice || preferred :
   firstDiscoveryChoice || elementalChoice || startingChoice || sameSkill || rankedDiscovery[0]?.card || preferred || attemptedCard ||
   (chest ? cards[Math.floor(Math.random() * cards.length)] : cards[0]));
 if (!card) {
-  status.textContent = "三元素箭：目前牌面沒有可選技能，且無可用重抽／放逐";
+  status.textContent = skillPlan.enabled ? "技能等級計畫：牌面技能皆已達標，等待可用重抽／放逐" : arrowMode!=="off" ? "三元素箭：目前牌面沒有可選技能，且無可用重抽／放逐" : "原本優先順序：目前沒有可選技能，且無可用重抽／放逐";
   return;
 }
 const index = Number(card.dataset.i);
