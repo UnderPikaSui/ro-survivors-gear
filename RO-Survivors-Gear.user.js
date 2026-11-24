@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 95.0
+// @version 95.1
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -4640,7 +4640,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V95.0 網頁控制特別版";
+  const versionName = "Gear V95.1 網頁控制特別版";
   let automationMode="normal";
   const raidCompletion={entered:false,finished:false};
   let raidExitAfterDone=false,raidChecklistAfter=0,raidChecklistAskedAt=0;
@@ -11341,7 +11341,7 @@ if(autoMove && raidActive() && packet.raidMechanics?.enabled){
   const decision=chooseRaidMechanicRoute(packet,Date.now(),blockedDirections);
   raidRouteProgress.record(decision?.direction??-1);
   if(decision){status.textContent=decision.label;previousDirection=null;escapeDirection=-1;escapeUntil=0;
-    if(decision.direction>=0){const nextHeld=route[decision.direction];if(!held||held.length!==nextHeld.length||held.some((key,i)=>key!==nextHeld[i])){release();held=nextHeld;for(const key of held)send("keydown",key);}clearTimeout(movePulse);movePulse=setTimeout(release,packet.raidMechanics.pulseMs||120);}else{clearTimeout(movePulse);release();}
+    if(decision.direction>=0){const nextHeld=route[decision.direction];if(held!==nextHeld){release();held=nextHeld;for(const key of held)send("keydown",key);}clearTimeout(movePulse);movePulse=setTimeout(release,packet.raidMechanics.pulseMs||120);}else{clearTimeout(movePulse);release();}
     return;
   }
 }
