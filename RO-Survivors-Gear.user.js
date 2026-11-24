@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 92.5
+// @version 92.6
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -78,7 +78,7 @@ function createRaidMechanismObserver(now=()=>Date.now()) {
   const state={rid:null,me:0,aid:0,job:"",zone:0,zi:null,skew:0,targets:new Map(),players:new Map(),trait:{set:[]},safe:null,mark:null,shield:0,down:false,ended:false,seen:0};
   const cleanTarget=t=>({id:String(t.id||""),kind:t.kind,mob:t.mob,name:t.name,at:Array.isArray(t.at)?t.at.slice(0,2):null,alive:!!t.alive,hp:t.hp,mhp:t.mhp,owner:t.owner,traits:(t.traits||[]).slice(0,12),hatch:!!t.hatch,spawn:!!t.spawn});
   const cleanTrait=t=>({set:(Array.isArray(t?.set)?t.set:[]).slice(0,16).map(x=>({on:x.on,mult:x.mult})),until:t?.until,form:t?.form,win:t?.win});
-  const cleanZone=z=>z?{z:z.z,boss:!!z.boss,need:z.need,kills:z.kills,hold:z.hold?{at:Array.isArray(z.hold.at?.[0])?z.hold.at.slice(0,8).map(a=>a.slice(0,2)):z.hold.at?.slice(0,2),r:z.hold.r,secs:z.hold.secs,acc:z.hold.acc,accs:z.hold.accs?.slice(0,8),in:z.hold.in,need:z.hold.need,each:!!z.hold.each}:null}:null;
+  const cleanZone=z=>z?{z:z.z,boss:!!z.boss,need:z.need,kills:z.kills,...Object.fromEntries(['objs','elites','mids'].filter(k=>Array.isArray(z[k])).map(k=>[k,z[k].slice(0,128).filter(row=>Array.isArray(row)&&row.length>=2).map(row=>[String(row[0]),!!row[1]])])),hold:z.hold?{at:Array.isArray(z.hold.at?.[0])?z.hold.at.slice(0,8).map(a=>a.slice(0,2)):z.hold.at?.slice(0,2),r:z.hold.r,secs:z.hold.secs,acc:z.hold.acc,accs:z.hold.accs?.slice(0,8),in:z.hold.in,need:z.hold.need,each:!!z.hold.each}:null}:null;
   const targets=rows=>{for(const t of (rows||[]).slice(0,128)){if(!t?.id)continue;if(state.targets.size>=128&&!state.targets.has(String(t.id)))continue;state.targets.set(String(t.id),{...state.targets.get(String(t.id)),...cleanTarget(t)});}};
   const players=rows=>{for(const a of (rows||[]).slice(0,64)){if(!Array.isArray(a)||!Number.isFinite(a[0])||![a[1],a[2]].every(Number.isFinite))continue;if(state.players.size>=64&&!state.players.has(a[0]))continue;state.players.set(a[0],{slot:a[0],x:a[1],y:a[2],flags:0});}};
   function message(s,socket){
@@ -181,14 +181,16 @@ function planRaidObjective(s,definition,player,targets,now,spots) {
   const available=alive;
   const priority=t=>t.kind==='src'?0:t.kind==='obj'?1:t.kind==='elite'||t.kind==='mid'?2:t.kind==='boss'?4:3;
   const sorted=available.sort((a,b)=>priority(a)-priority(b)||distance(a)-distance(b));
-  const objective=sorted.find(t=>t.kind==='obj');
-  if(objective)return {kind:'obj',label:'副本｜優先完成分區任務物件',target:objective,radius:130,stay:distance(objective)<=130,marked,players,mark};
+  const objectIds=Array.isArray(zi?.objs)?new Set(zi.objs.filter(row=>row[1]).map(row=>String(row[0]))):null;
+  const specialIds=new Set([...(zi?.elites||[]),...(zi?.mids||[])].filter(row=>row[1]).map(row=>String(row[0])));
+  const objective=sorted.find(t=>t.kind==='obj'&&(!objectIds||objectIds.has(String(t.id)))||(t.kind==='elite'||t.kind==='mid')&&specialIds.has(String(t.id)));
+  if(objective)return {kind:objective.kind,label:'副本｜優先完成指定任務目標',target:objective,radius:130,stay:distance(objective)<=130,marked,players,mark};
   if(s.next?.at)return {kind:'next',label:'副本｜通過已開啟的門前往下一區',target:point(s.next.at),stay:false,marked,players,mark};
   if(zi&&!zi.boss&&zi.need>0&&zi.kills<zi.need)return {kind:'kills',label:'副本｜小怪任務：前往傳送點等待',target:null,stay:true,marked,players,mark};
   const source=sorted.find(t=>t.kind==='src');
   if(source)return {kind:'source',label:'副本｜優先處理補血源',target:source,radius:130,stay:distance(source)<=130,marked,players,mark};
   const boss=alive.find(t=>t.kind==='boss'),blocked=boss&&s.shield>now;
-  const chosen=sorted.find(t=>!(t.kind==='boss'&&blocked));
+  const chosen=sorted.find(t=>!(t.kind==='boss'&&blocked)&&!(t.kind==='obj'&&objectIds&&!objectIds.has(String(t.id))));
   if(chosen)return {kind:chosen.kind,label:chosen.kind==='obj'?'副本｜優先拆物件／蛋／蠅巢':chosen.kind==='boss'?'副本｜攻擊首領並躲招':'副本｜清除分區精英／中王',target:chosen,radius:130,stay:distance(chosen)<=130,marked,players,mark};
   if(blocked){const d=distance(boss),dx=(player.x-boss.x)/(d||1),dy=(player.y-boss.y)/(d||1);return {kind:'shield',label:'副本｜護盾期間退開躲招',target:{x:boss.x+(d?dx:1)*650,y:boss.y+(d?dy:0)*650},stay:d>=600,marked,players,mark};}
   return {kind:'wait',label:'副本｜等待分區目標與隊友',target:null,stay:true,marked,players,mark};
@@ -302,7 +304,10 @@ function installRaidMechanics(book) {
         return false;
       };
       const tracked=new Map(s.targets);
-      for(const [id,e] of [...entityById].slice(0,128))if(!tracked.has(id))tracked.set(id,{id,alive:true,kind:e.def?.boss?'mid':'obj',at:[e.x/32-.5,e.y/32-.5]});
+      for(const [id,e] of [...entityById].slice(0,128))if(!tracked.has(id)){
+        const object=s.zi?.objs?.find(row=>String(row[0])===id),elite=s.zi?.elites?.find(row=>String(row[0])===id),mid=s.zi?.mids?.find(row=>String(row[0])===id),task=object||elite||mid;
+        tracked.set(id,{id,alive:task?task[1]:true,kind:object?'obj':elite?'elite':mid?'mid':'native',at:[e.x/32-.5,e.y/32-.5]});
+      }
       const priority=t=>t.kind==='obj'?0:t.kind==='src'?1:2;
       const targets=[...tracked.values()].filter(t=>t.alive&&t.at&&targetInZone(t)).map(t=>{const e=entityById.get(t.id);return {...t,x:e?.x??(t.at[0]+.5)*32,y:e?.y??(t.at[1]+.5)*32};})
         .sort((a,b)=>priority(a)-priority(b)||Math.hypot(a.x-player.x,a.y-player.y)-Math.hypot(b.x-player.x,b.y-player.y)).slice(0,32).filter(t=>Math.hypot(t.x-player.x,t.y-player.y)<140||reachable(t));
@@ -4523,7 +4528,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V92.5 網頁控制特別版";
+  const versionName = "Gear V92.6 網頁控制特別版";
   let automationMode="normal";
   const raidCompletion={entered:false,finished:false};
   const compactRaidToggle=document.createElement("button");compactRaidToggle.type="button";
@@ -9702,6 +9707,8 @@ function chooseRaidMechanicRoute(packet,now=Date.now(),blockedDirections=[]) {
   const zones=[...(packet.hazards||[]).filter(a=>!neutral.some(b=>same(a,b))||danger.some(b=>same(a,b))),...danger];
   const [px,py]=packet.player,age=Math.max(0,Math.min(.3,(now-packet.at)/1000));
   const clearance=(x,y)=>Math.min(raidHazardClearance(zones,x,y),shotClearance(packet.enemyShots||[],packet.player,[x,y],age)-37,(packet.enemies||[]).reduce((v,[ex,ey])=>Math.min(v,Math.hypot(x-ex,y-ey)-38),Infinity));
+  const mandatorySafe=m.kind==='bell'||m.kind==='curse';
+  if(mandatorySafe&&m.stay)return {direction:-1,label:m.label+'｜安全區優先，留在圈內'};
   const origin=clearance(px,py),separation=(x,y)=>(m.players||[]).reduce((d,[a,b])=>Math.min(d,Math.hypot(x-a,y-b)),Infinity);
   if(m.stay&&origin>0&&(!m.marked||separation(px,py)>m.markRadius+35))return {direction:-1,label:m.label};
   const goal=m.waypoint||m.target;
@@ -9714,14 +9721,15 @@ function chooseRaidMechanicRoute(packet,now=Date.now(),blockedDirections=[]) {
   }).filter(Boolean);
   if(!candidates.length)return {direction:-1,label:m.label+'（無可通行方向）'};
   const safe=candidates.filter(c=>c.end>0&&(origin<=0||c.path>0));
-  const pool=safe.length?safe:candidates;
+  const pool=mandatorySafe?candidates:safe.length?safe:candidates;
   pool.sort((a,b)=>{
+    if(mandatorySafe)return a.distance-b.distance||b.end-a.end;
     if(!safe.length)return b.end-a.end||b.sep-a.sep;
     if(m.marked&&m.kind!=='bell'&&m.kind!=='curse'&&Math.min(a.sep,b.sep)<m.markRadius+40)return b.sep-a.sep||a.distance-b.distance;
     if(origin<=0 && !goal)return b.end-a.end;
     return a.distance-b.distance||Math.min(100,b.monster)-Math.min(100,a.monster)||b.end-a.end;
   });
-  return {direction:pool[0].direction,label:origin<=0?m.label+'｜閃避危險':m.label};
+  return {direction:pool[0].direction,label:mandatorySafe?m.label+'｜安全區優先':origin<=0?m.label+'｜閃避危險':m.label};
 }
 
   function shotClearance(shots, [px,py], [x,y], age) {
