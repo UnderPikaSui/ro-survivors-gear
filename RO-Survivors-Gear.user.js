@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 93.0
+// @version 94.0
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -180,7 +180,8 @@ function planRaidObjective(s,definition,player,targets,now,spots) {
   const alive=targets.filter(t=>t.alive);
   const available=alive;
   const priority=t=>t.kind==='src'?0:t.kind==='obj'?1:t.kind==='elite'||t.kind==='mid'?2:t.kind==='boss'?4:3;
-  const sorted=available.sort((a,b)=>priority(a)-priority(b)||distance(a)-distance(b));
+  const taskOrder=new Map([...(zi?.objs||[]),...(zi?.elites||[]),...(zi?.mids||[])].map((row,i)=>[String(row[0]),i]));
+  const sorted=available.sort((a,b)=>priority(a)-priority(b)||(s.rid==='r4'?((taskOrder.get(String(a.id))??9999)-(taskOrder.get(String(b.id))??9999)):0)||distance(a)-distance(b));
   const objectIds=Array.isArray(zi?.objs)?new Set(zi.objs.filter(row=>row[1]).map(row=>String(row[0]))):null;
   const specialIds=new Set([...(zi?.elites||[]),...(zi?.mids||[])].filter(row=>row[1]).map(row=>String(row[0])));
   const objective=sorted.find(t=>t.kind==='obj'&&(!objectIds||objectIds.has(String(t.id)))||(t.kind==='elite'||t.kind==='mid')&&specialIds.has(String(t.id)));
@@ -214,6 +215,33 @@ function raidKillWaitPoint(game,definition,state,layout){
   }
   return candidates.sort((a,b)=>Math.hypot(a.x-player.x,a.y-player.y)-Math.hypot(b.x-player.x,b.y-player.y))[0]||null;
 }
+
+function raidFixedCorridorPath(game,definition,state,target,kind,cache,pathTo){
+  if(state.rid!=='r4'||['bell','curse','mark','shield'].includes(kind))return {path:pathTo(target),fixed:false};
+  const player=game.player,raw=state.zone>0?definition.zones[state.zone-1]?.next:definition.zones[0]?.seeds?.[0];
+  if(!raw)return {path:pathTo(target),fixed:false};
+  cache.fixedRoutes??=new Map();
+  const key=[state.zone,kind,target.id||Math.round(target.x/32)+','+Math.round(target.y/32),game.walk?.warpsKey||''].join(':');
+  let route=cache.fixedRoutes.get(key);
+  if(!route){
+    const anchor={x:(raw[0]+.5)*32,y:(raw[1]+.5)*32},path=pathTo(target,anchor);
+    if(!path?.length)return {path:pathTo(target),fixed:false};
+    route={points:path.map(p=>({x:p.x,y:p.y}))};
+    if(cache.fixedRoutes.size>=24)cache.fixedRoutes.delete(cache.fixedRoutes.keys().next().value);cache.fixedRoutes.set(key,route);
+  }
+  const points=route.points,last=points.at(-1),distance=p=>Math.hypot(player.x-p.x,player.y-p.y);
+  if(kind==='boss'&&distance(last)<130&&Math.hypot(target.x-last.x,target.y-last.y)>130)return {path:pathTo(target),fixed:false};
+  const nearby=points.map((p,i)=>({p,i,d:distance(p)})).sort((a,b)=>a.d-b.d).slice(0,8);
+  const visible=nearby.find(({p})=>!game.walk?.lineClear||game.walk.lineClear(player.x,player.y,p.x,p.y));
+  if(visible){let i=visible.i;if(visible.d<=8&&i<points.length-1)i++;return {path:points.slice(i),fixed:true};}
+  // If an attack displaced the player, rejoin the cached corridor through a native path.
+  for(const {p,i} of nearby){const join=pathTo(p),end=join?.at(-1);if(!end)continue;
+    if(Math.hypot(end.x-p.x,end.y-p.y)<=48)return {path:[...join,...points.slice(i+1)],fixed:true};
+    return {path:join,fixed:true};
+  }
+  return {path:null,fixed:true};
+}
+
 function installRaidMechanics(book) {
   if(location.hostname!=="ro.hans-webgametw.com"||window.__roHelperRaidMechanics)return;
   const observer=createRaidMechanismObserver(),telegraphs=new WeakMap(),games=new WeakMap();
@@ -273,16 +301,16 @@ function installRaidMechanics(book) {
         const label=definition.zones[s.zone]?.reuse??s.zone;
         if(cx>=0&&cy>=0&&cx<w&&cy<h&&labels[cy*w+cx]===label)s.next=null;
       }
-      const pathTo=target=>{
+      const pathTo=(target,from=player)=>{
         if(!target||![target.x,target.y].every(Number.isFinite)||!game.walk?.pathTo)return null;
         const tolerance=target.kind==='obj'||target.kind==='src'?130:80;
         const end=game.walk.nearestWalkable?.(target.x,target.y)||[target.x,target.y];
         if(Math.hypot(end[0]-target.x,end[1]-target.y)>tolerance)return null;
-        const direct=game.walk.pathTo(player.x,player.y,...end);
+        const direct=game.walk.pathTo(from.x,from.y,...end);
         if(direct?.length&&Math.hypot(direct.at(-1).x-target.x,direct.at(-1).y-target.y)<=tolerance)return direct.slice();
         // The native raid maps use open warp doors between disconnected rooms.
         // Follow only the first physical leg; recompute after the actual teleport.
-        const legs=game.walk.route?.(player.x,player.y,...end),last=legs?.at(-1)?.at(-1);
+        const legs=game.walk.route?.(from.x,from.y,...end),last=legs?.at(-1)?.at(-1);
         if(!last||Math.hypot(last.x-target.x,last.y-target.y)>tolerance||!legs[0]?.length)return null;
         return legs[0].slice();
       };
@@ -335,7 +363,8 @@ function installRaidMechanics(book) {
       }
       if(!result.stay&&plan.target){
         const key=plan.kind+':'+Math.round(plan.target.x/32)+','+Math.round(plan.target.y/32);
-        if(cache.pathKey!==key||now-cache.pathAt>300||!cache.path?.length){cache.pathKey=key;cache.pathAt=now;cache.path=pathTo(plan.target);}
+        if(cache.pathKey!==key||now-cache.pathAt>300||!cache.path?.length){cache.pathKey=key;cache.pathAt=now;const corridor=raidFixedCorridorPath(game,definition,s,plan.target,plan.kind,cache,pathTo);cache.path=corridor.path;cache.fixedRouteUsed=corridor.fixed;}
+        if(cache.fixedRouteUsed)result.label='尼德霍格｜固定路線 · '+plan.label;
         if(cache.path?.length){
           let nearest=0;for(let i=1;i<cache.path.length;i++)if(Math.hypot(cache.path[i].x-player.x,cache.path[i].y-player.y)<Math.hypot(cache.path[nearest].x-player.x,cache.path[nearest].y-player.y)&&(!game.walk?.lineClear||game.walk.lineClear(player.x,player.y,cache.path[i].x,cache.path[i].y)))nearest=i;
           if(nearest)cache.path=cache.path.slice(nearest);
@@ -4530,7 +4559,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V93.0 網頁控制特別版";
+  const versionName = "Gear V94.0 網頁控制特別版";
   let automationMode="normal";
   const raidCompletion={entered:false,finished:false};
   const compactRaidToggle=document.createElement("button");compactRaidToggle.type="button";
