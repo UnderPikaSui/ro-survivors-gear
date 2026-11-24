@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 88.1
+// @version 89.0
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -4436,7 +4436,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V88.1 網頁控制特別版";
+  const versionName = "Gear V89.0 網頁控制特別版";
   let automationMode="normal";
   const raidCompletion={entered:false,finished:false};
   const compactRaidToggle=document.createElement("button");compactRaidToggle.type="button";
@@ -4720,7 +4720,8 @@ function raidGroupPanelAction(snapshot,preset,now) {
     if(!raidCleanupPending||raidActive()||!document.body.classList.contains('in-lobby'))return false;
     if(document.getElementById('rg-count'))return false;
     const settings=inventorySettings();
-    if((!settings.store&&!settings.sell&&!targetStorageRules.size)||(!inventoryRules(settings).length&&!targetStorageRules.size)){raidCleanupPending=false;return false;}
+    const targetCount=typeof targetStorageRules!=="undefined"?targetStorageRules.size:0;
+    if((!settings.store&&!settings.sell&&!targetCount)||(!inventoryRules(settings).length&&!targetCount)){raidCleanupPending=false;return false;}
     if(inventoryRun?.raidCleanup&&inventoryRun.done){raidCleanupPending=false;return false;}
     if(!inventoryRun||inventoryRun.done){
       if(document.querySelector('.overlay:not(.hidden)')){
@@ -7334,7 +7335,7 @@ function hansEventStagesForLap(lap) {
         if (!Array.isArray(entry) || !storageGearById.has(entry[0]) || !Array.isArray(entry[1])) continue;
         targetStorageRules.set(entry[0],{terms:entry[1].filter(term => Object.hasOwn(storageAffixes,term)),
           page:Number.isInteger(entry[2]) && entry[2] >= 0 && entry[2] <= 6 ? entry[2] : 0,
-          quality:storageQuality(entry[3]),tier:storageTier(entry[4]),alternatives:readStorageAlternatives(entry[5])});
+          quality:storageQuality(entry[3]),tier:storageTier(entry[4]),alternatives:readStorageAlternatives(entry[5]),action:entry[6]==="sell"?"sell":"store"});
       }
     }
     const enabled = taiwanGame && stored?.enabled === true && targetStorageRules.size > 0;
@@ -7356,11 +7357,12 @@ function hansEventStagesForLap(lap) {
   }
   function storageRuleEntry(id,rule) {
     const entry=[id,[...rule.terms],rule.page,rule.quality,rule.tier];
-    if (rule.alternatives?.length) entry.push(rule.alternatives.map(r=>[[...r.terms],r.page,r.quality,r.tier]));
+    if (rule.alternatives?.length || rule.action==="sell") entry.push((rule.alternatives || []).map(r=>[[...r.terms],r.page,r.quality,r.tier]));
+    if(rule.action==="sell")entry.push("sell");
     return entry;
   }
   function selectTargetStorageRule(rule,effects,tier,quality) {
-    if (!rule || rule.ambiguous) return null;
+    if (!rule || rule.ambiguous || rule.action==="sell") return null;
     return [rule,...rule.alternatives || []].find(candidate=>(!candidate.tier || tier>=candidate.tier) && targetStorageMatch(candidate,effects,quality)) || null;
   }
   function targetStorageMatch(rule, effects, quality) {
@@ -7402,7 +7404,8 @@ function hansEventStagesForLap(lap) {
     const rules = new Map();
     let skipped = 0;
     for (const entry of data.rules) {
-      if (!Array.isArray(entry) || (entry.length !== 5 && entry.length !== 6)) throw Error('設定檔規則格式錯誤');
+      if (!Array.isArray(entry) || (entry.length !== 5 && entry.length !== 6 && entry.length !== 7)) throw Error('設定檔規則格式錯誤');
+      if(entry.length===7&&entry[6]!=="sell"&&entry[6]!=="store")throw Error('設定檔包含無效的處理方式');
       const [id,terms,page,quality,tier] = entry;
       if (!Number.isSafeInteger(id) || !Array.isArray(terms) || terms.length > 50 ||
           terms.some(term => typeof term !== 'string' || !Object.hasOwn(storageAffixes,term)) ||
@@ -7410,7 +7413,7 @@ function hansEventStagesForLap(lap) {
           !Number.isInteger(quality) || quality < 0 || quality >= inventoryQualities.length ||
           !Number.isSafeInteger(tier) || tier < 0 || tier > 99) throw Error('設定檔包含無效的存倉條件');
       if (!storageGearById.has(id)) { skipped++; continue; }
-      rules.set(id,{terms:new Set(terms),page,quality,tier,alternatives:readStorageAlternatives(entry[5])});
+      rules.set(id,{terms:new Set(terms),page,quality,tier,alternatives:readStorageAlternatives(entry[5]),action:entry[6]==="sell"?"sell":"store"});
     }
     return {enabled:data.enabled,rules,skipped};
   }
@@ -7420,14 +7423,14 @@ function hansEventStagesForLap(lap) {
     let stored;
     try { stored = JSON.parse(localStorage.getItem(settingKey("ro-helper-target-storage")) ?? localStorage.getItem(settingKey("ro-helper-target-pickup")) ?? "null"); } catch {}
     const draft = new Map(Array.isArray(stored?.rules) ? stored.rules.filter(entry =>
-      Array.isArray(entry) && storageGearById.has(entry[0]) && Array.isArray(entry[1])).map(([id,terms,page,quality,tier,alternatives]) => [id,{terms:new Set(terms),page:page ?? 0,quality:storageQuality(quality),tier:storageTier(tier),alternatives:readStorageAlternatives(alternatives)}]) : []);
+      Array.isArray(entry) && storageGearById.has(entry[0]) && Array.isArray(entry[1])).map(([id,terms,page,quality,tier,alternatives,action]) => [id,{terms:new Set(terms),page:page ?? 0,quality:storageQuality(quality),tier:storageTier(tier),alternatives:readStorageAlternatives(alternatives),action:action==="sell"?"sell":"store"}]) : []);
     const dialog = document.createElement("dialog");
     dialog.id = "ro-helper-target-storage";
     dialog.style.cssText = "width:min(630px,94vw);box-sizing:border-box";
     const form = document.createElement("form");
     form.style.cssText = "display:grid;gap:9px";
     const title = document.createElement("strong");
-    title.textContent = "指定存倉 · 漢斯裝備圖鑑";
+    title.textContent = "指定存倉／強制賣出 · 漢斯裝備圖鑑";
     const search = document.createElement("input");
     search.type = "search";
     search.placeholder = "搜尋裝備、部位、BOSS、MINI 或首領名稱";
@@ -7444,7 +7447,7 @@ function hansEventStagesForLap(lap) {
     const [selectedLabel,selectedOnly] = checkbox("只顯示已勾選裝備",false);
     const [bossLabel,bossOnly] = checkbox("王裝（BOSS／MINI 掉落）",false);
     const help = document.createElement("small");
-    help.textContent = "先勾裝備，再勾要同時出現的隨機詞綴。★固定詞條不計入隨機詞綴。整理背包時，符合最低 Tier、品質和隨機詞綴的裝備會存入指定頁。開啟自動賣裝時，未命中的裝備會依整理規則出售。";
+    help.textContent = "先勾裝備，再選「指定存倉」或「強制賣出」。強制賣出優先於所有存倉條件，不看詞綴、Tier及品質；穿戴中、已插卡或遊戲保護的裝備不賣。★固定詞條不計入隨機詞綴。整理背包時，符合最低 Tier、品質和隨機詞綴的裝備會存入指定頁。開啟自動賣裝時，未命中的裝備會依整理規則出售。";
     const count = document.createElement("small");
     const list = document.createElement("div");
     list.style.cssText = "display:grid;gap:6px;max-height:52vh;overflow:auto";
@@ -7513,6 +7516,12 @@ function hansEventStagesForLap(lap) {
         tier.value = String(draft.get(id)?.tier ?? 0);
         tier.onchange = () => { const rule = draft.get(id); if (rule) rule.tier = storageTier(tier.valueAsNumber || 0); };
         tierLabel.append("最低 Tier（0 不限）",tier);
+        const actionLabel=document.createElement("label"),action=document.createElement("select");
+        action.append(new Option("指定存倉","store"),new Option("強制賣出（不看素質）","sell"));
+        action.value=draft.get(id)?.action || "store";
+        actionLabel.append("處理方式：",action);terms.append(actionLabel,document.createElement("br"));
+        const updateAction=()=>{for(const field of terms.querySelectorAll("input,select"))if(field!==action)field.disabled=action.value==="sell";};
+        action.onchange=()=>{const rule=draft.get(id);if(rule)rule.action=action.value;updateAction();};
         terms.append(pageLabel," ",tierLabel,rarity,hint);
         const alternatives = draft.get(id)?.alternatives || [];
         if (alternatives.length) {
@@ -7538,8 +7547,9 @@ function hansEventStagesForLap(lap) {
           };
           terms.append(label);
         }
+        updateAction();
         checked.onchange = () => {
-          if (checked.checked) draft.set(id,{terms:new Set(),page:0,quality:0,tier:0});
+          if (checked.checked) draft.set(id,{terms:new Set(),page:0,quality:0,tier:0,action:action.value});
           else {
             draft.delete(id);
             page.value = "0";
@@ -8614,6 +8624,10 @@ function hansEventStagesForLap(lap) {
         const cardLine = [...tip.querySelectorAll(".ro-body > .muted")].find(el =>
           /^(?:卡片|Cards|Cartas)\s*[:：]/i.test(el.textContent.trim()));
         const hasCard = cardLine && !/(?:空|free|libres|livres|empty)/i.test(cardLine.textContent);
+        const forcedTarget=findTargetStorageRule(tip,gearIdByUid.get(uid));
+        if(forcedTarget?.action==="sell"&&!forcedTarget.ambiguous){
+          close.click();if(!hasCard)run.reject.add(uid);continue;
+        }
         const bonuses = inventoryRandomAffixLines(uid);
         if(bonuses===null){close.click();continue;}
         const tierText = tip.querySelector(".tip-item .muted")?.textContent.normalize("NFKC") || "";
