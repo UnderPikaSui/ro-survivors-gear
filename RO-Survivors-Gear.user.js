@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 95.1
+// @version 96.0
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -4640,7 +4640,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V95.1 網頁控制特別版";
+  const versionName = "Gear V96.0 網頁控制特別版";
   let automationMode="normal";
   const raidCompletion={entered:false,finished:false};
   let raidExitAfterDone=false,raidChecklistAfter=0,raidChecklistAskedAt=0;
@@ -8198,6 +8198,126 @@ function hansEventStagesForLap(lap) {
     status.textContent=(run.kind==='star'?'升星至 ★':'精煉至 +')+nextLevel;go.click();return true;
   }
 
+  // Manual card replacement: read the native UI, then invoke only its socket buttons.
+  const cardSwapButton=document.createElement('button');cardSwapButton.type='button';cardSwapButton.textContent='卡片更換';
+  let cardSwapBusy=false,cardSwapCancel=false,cardSwapDialog=null;
+  const cardSwapDelay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+  const cardSwapShown=selector=>document.querySelector(selector+':not(.hidden)');
+  function cardSwapCheck(context,ignoreCancel=false){
+    if(cardSwapCancel&&!ignoreCancel)throw Error('已停止更換');
+    if(context.account!==activeAccount||!document.body.classList.contains('in-lobby'))throw Error('帳號或場景已改變，停止更換');
+    const title=document.getElementById('cp-title')?.textContent.trim();
+    if(context.character&&title&&title!==context.character)throw Error('角色已改變，請重新讀取');
+  }
+  async function cardSwapPanel(context){
+    cardSwapCheck(context);
+    if(!cardSwapShown('#charpanel'))document.getElementById('lobby-char')?.click();
+    for(let i=0;i<30&&!cardSwapShown('#charpanel');i++){await cardSwapDelay(80);cardSwapCheck(context);}
+    if(!cardSwapShown('#charpanel'))throw Error('無法開啟角色裝備視窗');
+    const title=document.getElementById('cp-title')?.textContent.trim();if(!title)throw Error('讀不到角色名稱');
+    if(!context.character)context.character=title;cardSwapCheck(context);
+    document.getElementById('cp-sock-done')?.click();
+    document.querySelector('#charpanel .tab-btn[data-tab="inv"]')?.click();
+    const all=document.querySelector('#cp-inv-filters [data-f="all"]');if(!all)throw Error('裝備清單尚未載入');all.click();
+    const mine=document.getElementById('cp-only-mine');if(mine?.checked)mine.click();
+  }
+  function cardSwapCloseNative(context){
+    document.getElementById('cp-sock-done')?.click();
+    if(context.closePanel&&cardSwapShown('#charpanel'))document.getElementById('cp-back')?.click();
+  }
+  function cardSwapSlots(){
+    return [...document.querySelectorAll('#cp-sock-body .sock[data-i]')].map(el=>({index:Number(el.dataset.i),name:el.querySelector('img')?(el.querySelector('span')?.textContent.trim()||''):''}));
+  }
+  function cardSwapCards(){
+    return [...document.querySelectorAll('#cp-sock-body .sock-card[data-id]')].map(el=>({id:Number(el.dataset.id),name:el.querySelector('.cand-info b')?.textContent.trim()||'',effects:el.querySelector('.cand-info small')?.textContent.trim()||'',count:Number(el.querySelector('.qty-tag')?.textContent.replace(/[^0-9]/g,''))})).filter(c=>Number.isSafeInteger(c.id)&&c.id>0&&c.name&&Number.isSafeInteger(c.count)&&c.count>0);
+  }
+  async function cardSwapOpenGear(context,gear){
+    await cardSwapPanel(context);cardSwapCheck(context);
+    const row=[...document.querySelectorAll('#cp-inventory .item-cell[data-uid]')].find(el=>el.dataset.uid===gear.uid);
+    if(!row)throw Error('找不到指定裝備：'+gear.name);
+    row.click();
+    const selected=document.querySelector('#cp-inventory .item-cell.sel[data-uid]'),name=document.querySelector('#cp-inv-detail .eq-name b')?.textContent.trim();
+    if(selected?.dataset.uid!==gear.uid||name!==gear.name)throw Error('裝備識別已改變，停止更換');
+    const open=document.getElementById('cp-inv-cards');if(!open||open.disabled)throw Error('這件裝備沒有可操作卡槽，或由其他角色穿戴');open.click();
+    if(!cardSwapShown('#cp-sock')||document.querySelector('#cp-sock-body .eq-name b')?.textContent.trim()!==gear.name)throw Error('裝備卡槽視窗核對失敗');
+    const slots=cardSwapSlots();if(!slots.length||slots.some(v=>!Number.isSafeInteger(v.index)||v.index<0))throw Error('卡槽資料不完整');
+    cardSwapCheck(context);return {slots,cards:cardSwapCards()};
+  }
+  async function cardSwapReadGear(context){
+    await cardSwapPanel(context);const ids=[...document.querySelectorAll('#cp-inventory .item-cell[data-uid]')].map(el=>el.dataset.uid),items=[];
+    for(let i=0;i<ids.length;i++){
+      cardSwapCheck(context);const row=[...document.querySelectorAll('#cp-inventory .item-cell[data-uid]')].find(el=>el.dataset.uid===ids[i]);if(!row)continue;
+      const equipped=row.classList.contains('equipped');row.click();
+      const selected=document.querySelector('#cp-inventory .item-cell.sel[data-uid]'),name=document.querySelector('#cp-inv-detail .eq-name b')?.textContent.trim(),open=document.getElementById('cp-inv-cards');
+      if(selected?.dataset.uid===ids[i]&&name&&open&&!open.disabled)items.push({uid:ids[i],name,equipped,info:document.querySelector('#cp-inv-detail .muted')?.textContent.trim()||'',effects:[...document.querySelectorAll('#cp-inv-detail .bon-list li')].map(el=>el.textContent.trim()).join('、')});
+      if(i%10===0){status.textContent='讀取有卡槽的裝備 '+(i+1)+'／'+ids.length;await cardSwapDelay(0);}
+    }
+    cardSwapCheck(context);return items.sort((a,b)=>Number(b.equipped)-Number(a.equipped)||a.name.localeCompare(b.name));
+  }
+  function cardSwapValidatePlan(tasks,states){
+    const demand=new Map(),stock=new Map(),seen=new Set();
+    for(let i=0;i<tasks.length;i++){
+      const t=tasks[i],state=states[i],key=t.gear.uid+':'+t.slot;
+      if(seen.has(key))throw Error('同一卡槽不能重複設定');seen.add(key);
+      const slot=state.slots.find(s=>s.index===t.slot);if(!slot||slot.name!==t.old)throw Error(t.gear.name+' 的卡槽已改變，請重新選擇');
+      if(t.card){const card=state.cards.find(c=>c.id===t.card.id);if(!card||card.name!==t.card.name)throw Error('指定卡片已不足或不相容：'+t.card.name);demand.set(card.id,(demand.get(card.id)||0)+1);stock.set(card.id,Math.min(stock.get(card.id)??Infinity,card.count));}
+      else if(!slot.name)throw Error('指定拆除的卡槽已經是空的');
+    }
+    for(const [id,n]of demand)if(n>(stock.get(id)||0))throw Error('更換清單需要 '+n+' 張同一卡片，但卡冊只有 '+(stock.get(id)||0)+' 張');
+    return true;
+  }
+  async function cardSwapExecute(context,tasks){
+    let done=0;cardSwapBusy=true;cardSwapCancel=false;cardSwapButton.textContent='停止更換卡片';window.__roMenuHelper?.releaseMovement?.();
+    try{
+      const states=[];for(const task of tasks)states.push(await cardSwapOpenGear(context,task.gear));cardSwapValidatePlan(tasks,states);
+      for(const task of tasks){
+        cardSwapCheck(context);const state=await cardSwapOpenGear(context,task.gear);cardSwapValidatePlan([task],[state]);
+        const socket=[...document.querySelectorAll('#cp-sock-body .sock[data-i]')].find(el=>Number(el.dataset.i)===task.slot);if(!socket)throw Error('卡槽不存在');socket.click();
+        const selected=document.querySelector('#cp-sock-body .sock.sel[data-i]');if(Number(selected?.dataset.i)!==task.slot)throw Error('卡槽選取失敗');
+        cardSwapCheck(context);
+        if(task.card){const card=[...document.querySelectorAll('#cp-sock-body .sock-card[data-id]')].find(el=>Number(el.dataset.id)===task.card.id);if(!card)throw Error('卡片數量不足，停止更換');card.click();}
+        else{const remove=document.getElementById('cp-sock-remove');if(!remove||remove.disabled)throw Error('無法拆除這張卡片');remove.click();}
+        await cardSwapDelay(100);cardSwapCheck(context,true);
+        if(document.querySelector('#cp-inventory .item-cell.sel[data-uid]')?.dataset.uid!==task.gear.uid||document.querySelector('#cp-sock-body .eq-name b')?.textContent.trim()!==task.gear.name)throw Error('操作視窗已改變，停止後續更換');
+        const after=cardSwapSlots().find(s=>s.index===task.slot);if(!after||after.name!==(task.card?.name||''))throw Error('未確認換卡成功，已停止後續操作');
+        done++;status.textContent='更換卡片 '+done+'／'+tasks.length+'：'+task.gear.name+' 第'+(task.slot+1)+'洞';
+        if(cardSwapCancel)throw Error('已停止更換');
+      }
+      status.textContent='卡片更換完成 '+done+'／'+tasks.length+'；舊卡已依遊戲機制回卡冊';
+    }catch(error){status.textContent='卡片更換停止（已完成 '+done+'／'+tasks.length+'）：'+error.message;}
+    finally{cardSwapCloseNative(context);cardSwapBusy=false;cardSwapButton.textContent='卡片更換';}
+  }
+  function cardSwapShow(context,gears){
+    const dialog=document.createElement('dialog');dialog.id='ro-helper-card-swap';dialog.style.cssText='width:min(780px,94vw);max-height:85vh;padding:14px;box-sizing:border-box';cardSwapDialog=dialog;
+    const title=document.createElement('b');title.textContent='裝備卡片更換｜'+context.character;
+    const hint=document.createElement('p');hint.textContent='選裝備 → 選卡槽 → 搜尋卡片 → 加入清單。只使用卡冊現有的相容卡片；舊卡回卡冊。按執行才更換，不會在掛機中自動觸發。';
+    const layout=document.createElement('div');layout.style.cssText='display:flex;flex-wrap:wrap;gap:12px';const left=document.createElement('div'),right=document.createElement('div');left.style.cssText='flex:1 1 240px;min-width:0';right.style.cssText='flex:1 1 280px;min-width:0';
+    const gearSearch=document.createElement('input');gearSearch.placeholder='搜尋裝備名稱';gearSearch.style.width='95%';const gearList=document.createElement('div');gearList.style.cssText='max-height:200px;overflow:auto';left.append(gearSearch,gearList);
+    const selectedTitle=document.createElement('div'),sockets=document.createElement('div'),cardSearch=document.createElement('input'),cardList=document.createElement('div');cardSearch.placeholder='搜尋卡片名稱／詞條，例如急速';cardSearch.style.width='95%';cardList.style.cssText='max-height:240px;overflow:auto';right.append(selectedTitle,sockets,cardSearch,cardList);layout.append(left,right);
+    const queue=document.createElement('div'),message=document.createElement('div'),footer=document.createElement('div');footer.style.cssText='position:sticky;bottom:0;background:white;padding:10px 0;display:flex;gap:8px;flex-wrap:wrap';
+    let selected=null,state=null,slot=null,tasks=[],reading=false;
+    const renderQueue=()=>{queue.replaceChildren();const label=document.createElement('p');label.textContent='待執行：'+tasks.length+' 個卡槽';queue.append(label);for(const task of tasks){const row=document.createElement('div'),remove=document.createElement('button');remove.type='button';remove.textContent='移除';remove.onclick=()=>{tasks=tasks.filter(t=>t!==task);renderQueue();};row.append(task.gear.name+' ['+task.gear.uid.slice(-6)+']｜第'+(task.slot+1)+'洞：'+(task.old||'空槽')+' → '+(task.card?.name||'拆回卡冊')+' ',remove);queue.append(row);}start.disabled=!tasks.length||reading;};
+    const add=card=>{const old=state?.slots.find(s=>s.index===slot);if(!selected||!old){message.textContent='請先選擇裝備與卡槽';return;}if(card&&old.name===card.name){message.textContent='這個卡槽已是同名卡片，不需要更換';return;}if(!card&&!old.name)return;tasks=tasks.filter(t=>t.gear.uid!==selected.uid||t.slot!==slot);tasks.push({gear:{...selected},slot,old:old.name,card:card?{...card}:null});message.textContent='已加入清單，尚未執行';renderQueue();};
+    const renderCards=()=>{cardList.replaceChildren();if(slot===null||!state)return;const q=cardSearch.value.trim().toLocaleLowerCase();for(const card of state.cards.filter(c=>(c.name+' '+c.effects).toLocaleLowerCase().includes(q))){const row=document.createElement('button');row.type='button';row.style.cssText='display:block;text-align:left;width:100%;margin:4px 0;white-space:normal';row.textContent=card.name+' ×'+card.count+'｜'+card.effects;row.onclick=()=>add(card);cardList.append(row);}if(!cardList.childNodes.length)cardList.textContent='沒有符合搜尋的可用卡片；插在其他裝備的卡請先拆回卡冊。';};
+    const renderSockets=()=>{sockets.replaceChildren();for(const item of state?.slots||[]){const b=document.createElement('button');b.type='button';b.textContent='第'+(item.index+1)+'洞：'+(item.name||'空槽');b.style.cssText='margin:4px;border:'+(slot===item.index?'2px solid #2459a6':'1px solid #aaa');b.onclick=()=>{slot=item.index;renderSockets();renderCards();};sockets.append(b);}};
+    const choose=async gear=>{if(reading)return;reading=true;start.disabled=true;cardSwapBusy=true;cardSwapCancel=false;window.__roMenuHelper?.releaseMovement?.();try{cardSwapCheck(context);state=await cardSwapOpenGear(context,gear);selected=gear;slot=state.slots[0]?.index??null;selectedTitle.textContent=gear.name+' · '+gear.info+' ['+gear.uid.slice(-6)+']';renderSockets();renderCards();message.textContent='請選卡槽，再點選要換上的卡片';}catch(error){message.textContent=error.message;selected=null;state=null;slot=null;sockets.replaceChildren();cardList.replaceChildren();}finally{reading=false;cardSwapBusy=false;if(!cardSwapDialog?.open)cardSwapCloseNative(context);renderQueue();}};
+    const renderGear=()=>{gearList.replaceChildren();for(const gear of gears.filter(g=>(g.name+' '+g.info+' '+g.effects+' '+g.uid).toLocaleLowerCase().includes(gearSearch.value.trim().toLocaleLowerCase()))){const b=document.createElement('button');b.type='button';b.textContent=(gear.equipped?'【穿戴中】':'【背包】')+gear.name+' · '+gear.info+' ['+gear.uid.slice(-6)+']';b.title=gear.effects;b.style.cssText='display:block;text-align:left;margin:4px 0;width:100%';b.onclick=()=>choose(gear);gearList.append(b);}if(!gearList.childNodes.length)gearList.textContent='沒有符合搜尋且可操作卡槽的裝備。';};
+    const remove=document.createElement('button');remove.type='button';remove.textContent='將此洞卡片拆回卡冊';remove.onclick=()=>add(null);
+    const start=document.createElement('button');start.type='button';start.textContent='執行更換清單';start.onclick=()=>{if(reading||!tasks.length)return;const work=tasks.map(t=>({...t,gear:{...t.gear},card:t.card?{...t.card}:null}));cardSwapBusy=true;dialog.close();void cardSwapExecute(context,work);};
+    const close=document.createElement('button');close.type='button';close.textContent='關閉';close.onclick=()=>dialog.close();footer.append(remove,start,close);
+    dialog.append(title,hint,layout,queue,message,footer);dialog.onclose=()=>{if(reading)cardSwapCancel=true;cardSwapDialog=null;dialog.remove();if(!cardSwapBusy)cardSwapCloseNative(context);};document.body.append(dialog);dialog.showModal();gearSearch.oninput=renderGear;cardSearch.oninput=renderCards;renderGear();renderQueue();
+  }
+  cardSwapButton.onclick=async()=>{
+    if(cardSwapBusy){cardSwapCancel=true;status.textContent='正在停止卡片更換';return;}
+    if(cardSwapDialog?.open)return;
+    if(!taiwanGame||!document.body.classList.contains('in-lobby')){status.textContent='請回廣場後更換裝備卡片';return;}
+    if(readingGsAdvice||upgradeActive||recycleReading||cardRecycleActive||recycleDialog?.open||document.querySelector('dialog[open],.overlay:not(.hidden):not(#charpanel)')){status.textContent='請先結束整理／精煉／回收並關閉其他視窗';return;}
+    const context={account:activeAccount,character:null,closePanel:!cardSwapShown('#charpanel')};cardSwapBusy=true;cardSwapCancel=false;window.__roMenuHelper?.releaseMovement?.();
+    try{const gears=await cardSwapReadGear(context);cardSwapCloseNative(context);if(!gears.length)throw Error('目前沒有可操作卡槽的裝備');cardSwapShow(context,gears);status.textContent='已讀取 '+gears.length+' 件可換卡裝備';}
+    catch(error){cardSwapCloseNative(context);status.textContent='卡片更換：'+error.message;}
+    finally{cardSwapBusy=false;}
+  };
+
   const cardRecycleButton=document.createElement('button');cardRecycleButton.type='button';cardRecycleButton.textContent='卡片回收';
   let recycleReading=false,cardRecycleActive=false,cardRecycleOpened=false,recycleDialog=null,recycleSelection=new Set(),recycleAccount=null,recycleRowsSnapshot=[];
   const recycleLapOf=id=>Math.floor(Number(id)/1000000)+1;
@@ -10821,7 +10941,7 @@ const levelCardStop = createLevelCardStop();
 const resumePausedBattle = createPausedBattleResume();
 window.addEventListener("pagehide",levelCardStop.reset);
 const timer=setInterval(()=>{try {
-  if (recycleReading || recycleDialog?.open || cardRecycleActive || upgradeActive || document.getElementById("ro-helper-upgrade-settings")?.open || document.getElementById("ro-helper-transfer-settings")?.open) { release(); return; }
+  if (cardSwapBusy || cardSwapDialog?.open || recycleReading || recycleDialog?.open || cardRecycleActive || upgradeActive || document.getElementById("ro-helper-upgrade-settings")?.open || document.getElementById("ro-helper-transfer-settings")?.open) { release(); return; }
   if (handleRefreshDialog()) { release(); return; }
   if (readingGsAdvice) { release(); return; }
   if (Date.now() < hansHighDifficultyUntil) {
@@ -11736,7 +11856,7 @@ void connectCoordinates(false);
   content.style.cssText = "padding:5px;max-width:260px;max-height:calc(100vh - 64px);overflow:auto";
   const actions = document.createElement("div");
   actions.style.cssText = "display:flex;flex-direction:column;gap:6px;width:100%;box-sizing:border-box";
-  for (const control of [button, gpuSaver, ...(taiwanGame?[memorySaver,memoryCleanupButton,memoryCleanupReport,memoryStatusButton]:[]), autoLoginToggle, loginCharacterSetting, settingsTransferButton, ...(taiwanGame ? [worldBossToggle,worldBossMode,worldBossLeadRow,raidControls] : []), lootButton, mobileDrops, settings, treasureButton, share, ...(taiwanGame ? [inventoryButton,cardRecycleButton,upgradeButton,gsAdvisorButton,growthButton,targetStorageButton] : [difficultyButton]), movementToggle, collisionMode, chestMode, chestDiscoverySetting, ...(taiwanGame ? [goalActionSetting,cardStopMode,noFlipSetting,targetStop] : []), rollChoice, partyMode, rerollToggle, skillFocus.select, ...treasureFocus.map(choice => choice.select)]) {
+  for (const control of [button, gpuSaver, ...(taiwanGame?[memorySaver,memoryCleanupButton,memoryCleanupReport,memoryStatusButton]:[]), autoLoginToggle, loginCharacterSetting, settingsTransferButton, ...(taiwanGame ? [worldBossToggle,worldBossMode,worldBossLeadRow,raidControls] : []), lootButton, mobileDrops, settings, treasureButton, share, ...(taiwanGame ? [inventoryButton,cardRecycleButton,cardSwapButton,upgradeButton,gsAdvisorButton,growthButton,targetStorageButton] : [difficultyButton]), movementToggle, collisionMode, chestMode, chestDiscoverySetting, ...(taiwanGame ? [goalActionSetting,cardStopMode,noFlipSetting,targetStop] : []), rollChoice, partyMode, rerollToggle, skillFocus.select, ...treasureFocus.map(choice => choice.select)]) {
     control.style.cssText = "background:#234b96;color:white;padding:5px 7px;border-radius:5px;cursor:pointer";
     actions.append(control);
   }
@@ -11773,7 +11893,7 @@ void connectCoordinates(false);
   button.style.width = "100%";
   button.style.fontWeight = "bold";
   addPanelGroup("技能／寶物選牌",[settings,treasureButton,skillFocus.select,...treasureFocus.map(choice=>choice.select),rerollToggle,chestMode,chestDiscoverySetting,...(taiwanGame?[goalActionSetting,cardStopMode,noFlipSetting,targetStop]:[])]);
-  addPanelGroup("裝備／角色整理",taiwanGame?[inventoryButton,cardRecycleButton,upgradeButton,gsAdvisorButton,targetStorageButton,growthButton]:[]);
+  addPanelGroup("裝備／角色整理",taiwanGame?[inventoryButton,cardRecycleButton,cardSwapButton,upgradeButton,gsAdvisorButton,targetStorageButton,growthButton]:[]);
 
   addPanelGroup("移動／系統",[movementToggle,collisionMode,share,gpuSaver,...(taiwanGame?[memorySaver,memoryCleanupButton,memoryCleanupReport,memoryStatusButton]:[]),autoLoginToggle,loginCharacterSetting]);
   addPanelGroup("組隊／副本／世界王",[partyMode,rollChoice,...(taiwanGame?[worldBossToggle,worldBossMode,worldBossLeadRow,raidControls]:[])]);
