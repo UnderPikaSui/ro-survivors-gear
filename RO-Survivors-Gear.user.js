@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 92.2
+// @version 92.3
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -439,6 +439,21 @@ function installRaidMechanics(book) {
     }
   });
   Object.defineProperty = watchDefinition;
+  document.addEventListener('ro-helper-invite-friend',event=>{
+    const name=event.detail;let status='unavailable';
+    try{if(typeof name!=='string'||name.length>80||!document.body.classList.contains('in-lobby'))return;
+      const friends=lobby?.friends,view=lobby?.party?.view,friend=friends?.list?.find(f=>f.name===name);
+      if(!friends||typeof friends.actions?.inviteFar!=='function')status='unavailable';
+      else if(view&&view.leader!==view.me)status='notleader';
+      else if(view?.members?.some(m=>m.name===name))status='member';
+      else if((view?.members?.length||0)>=8)status='full';
+      else if(!friend)status='missing';
+      else if(!(friend.on>0)||!friend.lb)status='offline';
+      else if(friend.party)status='otherparty';
+      else{friends.actions.inviteFar(name);status='sent';}
+    }catch{status='unavailable';}
+    document.documentElement.dataset.roHelperFriendInvite=JSON.stringify({name,status});
+  });
   document.addEventListener('ro-helper-read-friends',()=>{
     try{const list=lobby?.friends?.list,view=lobby?.party?.view;
       document.documentElement.dataset.roHelperFriends=JSON.stringify({ready:!!lobby?.friends&&!!lobby?.party,friends:(Array.isArray(list)?list:[]).slice(0,500).filter(f=>typeof f.name==='string').map(f=>({name:f.name,online:f.on>0,channel:f.on>0?f.on:0,lobby:!!f.lb,party:!!f.party})),party:view?{leader:view.leader===view.me,members:(view.members||[]).slice(0,30).map(m=>m.name)}:null});
@@ -4485,7 +4500,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V92.2 網頁控制特別版";
+  const versionName = "Gear V92.3 網頁控制特別版";
   let automationMode="normal";
   const raidCompletion={entered:false,finished:false};
   const compactRaidToggle=document.createElement("button");compactRaidToggle.type="button";
@@ -4728,14 +4743,27 @@ function raidCompletionTransition(state,active,evidence){
     if(raidOrdinaryPartyPresent&&!data.party){raidPartyInvited.clear();}raidOrdinaryPartyPresent=!!data.party;
     if(data.party&&(!data.party.leader||data.party.members.length>=8))return false;
     const members=new Set(data.party?.members||[]),candidate=preset.names.find(name=>!members.has(name)&&now-(raidPartyInvited.get(name)??-Infinity)>=30000&&data.friends.some(f=>f.name===name&&f.online&&f.lobby&&!f.party));
-    if(!candidate)return false;
-    if(document.querySelector('.overlay:not(.hidden),dialog[open]'))return false;
-    // Use the game's own friend invite button, including cross-lobby handling.
+    if(!candidate){
+      const missing=preset.names.filter(name=>!members.has(name));if(!missing.length)return false;
+      const info=missing.map(name=>{const f=data.friends.find(f=>f.name===name);return name+'（'+(!f?'不在好友名單':!f.online?'離線／戰鬥中':f.party?'已有其他隊伍':'已邀請，等待接受')+'）';});
+      status.textContent='隊長自動組隊｜'+info.join('、');return true;
+    }
+    if(now<raidNextAction){status.textContent='隊長自動組隊｜準備邀請 '+candidate;return true;}
+    delete document.documentElement.dataset.roHelperFriendInvite;
+    document.dispatchEvent(new CustomEvent('ro-helper-invite-friend',{detail:candidate}));
+    let reply;try{reply=JSON.parse(document.documentElement.dataset.roHelperFriendInvite||'null');}catch{}
+    if(reply?.name===candidate){
+      raidPartyInvited.set(candidate,reply.status==='sent'?now:now-25000);raidNextAction=now+1200;
+      status.textContent=reply.status==='sent'?'隊長自動組隊｜已邀請 '+candidate+'，等待加入':'隊長自動組隊｜'+candidate+'：'+({offline:'離線／戰鬥中',otherparty:'已有其他隊伍',member:'已在隊伍內',full:'隊伍已滿',notleader:'目前不是隊長',unavailable:'遊戲連線尚未就緒',missing:'不在好友名單'}[reply.status]||'等待更新');
+      return true;
+    }
+    // Compatibility with an older loaded bridge: use the original native UI button.
+    if(document.querySelector('.overlay:not(.hidden),dialog[open]')){status.textContent='隊長自動組隊｜等待關閉視窗後邀請 '+candidate;return true;}
     document.getElementById('lobby-friends')?.click();
     const invite=[...document.querySelectorAll('#fr-body [data-act="invite"]')].find(b=>b.dataset.name===candidate);
-    if(!invite||invite.disabled){document.getElementById('fr-close')?.click();raidPartyInvited.set(candidate,now);return false;}
-    if(click(invite)){raidPartyInvited.set(candidate,now);raidFriendsOwned=true;status.textContent='副本隊長｜已邀請 '+candidate+' 加入隊伍';return true;}
-    document.getElementById('fr-close')?.click();return false;
+    if(!invite||invite.disabled){document.getElementById('fr-close')?.click();raidPartyInvited.set(candidate,now-25000);status.textContent='隊長自動組隊｜等待好友邀請按鈕，請確認已重新載入新版';return true;}
+    if(click(invite)){raidPartyInvited.set(candidate,now);raidFriendsOwned=true;status.textContent='隊長自動組隊｜已邀請 '+candidate+'，等待加入';return true;}
+    document.getElementById('fr-close')?.click();return true;
   }
 
   function readRaidGroupSnapshot(){try{return JSON.parse(document.documentElement.dataset.roHelperRaidGroup||'null');}catch{return null;}}
