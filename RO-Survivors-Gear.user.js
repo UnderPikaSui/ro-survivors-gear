@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 94.1
+// @version 94.2
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -236,15 +236,43 @@ function raidFixedCorridorPath(game,definition,state,target,kind,cache,pathTo){
     }
     let index=0;const previous=cache.fixedNodeRuns.get(cache.lastFixedNodeKey);
     if(previous){let common=0;while(common<Math.min(previous.points.length,points.length)&&previous.points[common].x===points[common].x&&previous.points[common].y===points[common].y)common++;index=Math.min(previous.index,Math.max(0,common-1));}
+    else{
+      // Join the nearest actually reachable forward corridor, never force a return to spawn.
+      const candidates=points.map((p,i)=>({p,i,d:Math.hypot(p.x-player.x,p.y-player.y)})).sort((a,b)=>a.d-b.d).slice(0,32);
+      let best=null;
+      for(const {p,i,d} of candidates){
+        const direct=!game.walk?.lineClear||game.walk.lineClear(player.x,player.y,p.x,p.y),join=direct?[p]:pathTo(p),last=join?.at(-1);
+        if(!last||Math.hypot(last.x-p.x,last.y-p.y)>48)continue;
+        let cost=0,from=player;for(const q of join){cost+=Math.hypot(q.x-from.x,q.y-from.y);from=q;}
+        if(!best||cost<best.cost-1||Math.abs(cost-best.cost)<=1&&i>best.i)best={i,cost};
+        if(best.cost<=24)break;
+      }
+      if(!best)return {path:null,fixed:true};index=best.i;
+    }
     run={points,index};if(cache.fixedNodeRuns.size>=24)cache.fixedNodeRuns.delete(cache.fixedNodeRuns.keys().next().value);cache.fixedNodeRuns.set(key,run);
   }
   cache.lastFixedNodeKey=key;
-  while(run.index<run.points.length-1&&Math.hypot(player.x-run.points[run.index].x,player.y-run.points[run.index].y)<=12)run.index++;
-  const next=run.points[run.index],distance=Math.hypot(player.x-next.x,player.y-next.y);
+  const near=p=>Math.hypot(player.x-p.x,player.y-p.y);
+  while(run.index<run.points.length-1){
+    const p=run.points[run.index],before=run.points[run.index-1],after=run.points[run.index+1];
+    let passed=false;
+    if(before){const dx=p.x-before.x,dy=p.y-before.y,len=Math.hypot(dx,dy),turn=dx*(after.y-p.y)-dy*(after.x-p.x);
+      if(len&&Math.abs(turn)<1)passed=((player.x-before.x)*dx+(player.y-before.y)*dy)/(len*len)>=1&&Math.abs((player.x-before.x)*dy-(player.y-before.y)*dx)/len<=20;
+    }
+    if(near(p)>20&&!passed)break;run.index++;
+  }
+  let aim=run.index;
+  const visible=p=>!game.walk?.lineClear||game.walk.lineClear(player.x,player.y,p.x,p.y);
+  while(aim+1<run.points.length){
+    const from=run.points[run.index],p=run.points[aim],next=run.points[aim+1];
+    if(near(next)>192||!visible(next))break;
+    if(aim>run.index&&Math.abs((p.x-from.x)*(next.y-p.y)-(p.y-from.y)*(next.x-p.x))>1)break;
+    aim++;
+  }
+  const next=run.points[aim],distance=near(next);
   if(kind==='boss'&&run.index===run.points.length-1&&distance<130&&Math.hypot(target.x-next.x,target.y-next.y)>130)return {path:pathTo(target),fixed:false};
-  const clear=!game.walk?.lineClear||game.walk.lineClear(player.x,player.y,next.x,next.y);
-  const path=clear?[{...next}]:pathTo(next);
-  return {path,fixed:true,nodeIndex:run.index+1,nodeCount:run.points.length};
+  const path=visible(next)?[{...next}]:pathTo(run.points[run.index]);
+  return {path,fixed:true,nodeIndex:run.index+1,nodeCount:run.points.length,continuous:aim>run.index&&distance>64};
 }
 
 function installRaidMechanics(book) {
@@ -356,7 +384,7 @@ function installRaidMechanics(book) {
         const fixedWait=rid==='r4'?definition.fixedNodes?.['wait'+s.zone]?.at(-1):null;
         const wait=fixedWait?{x:(fixedWait[0]+.5)*32,y:(fixedWait[1]+.5)*32}:cache.killWaitPoint;
         plan.target=wait;plan.radius=40;plan.stay=!wait||Math.hypot(wait.x-player.x,wait.y-player.y)<=40;
-        plan.label=wait?'副本｜小怪任務：傳送點前等待清怪完成':'副本｜小怪任務：等待傳送點位置，不追怪';
+        plan.label=wait?(rid==='r4'&&!plan.stay?'副本｜沿固定通道前往下一區入口':'副本｜下一區入口等待清怪開門'):'副本｜小怪任務：等待傳送點位置，不追怪';
       }
       Object.assign(result,{ready:true,kind:plan.kind,label:plan.label,stay:!!plan.stay,target:plan.target?[plan.target.x,plan.target.y]:null,radius:plan.radius||0,marked:plan.marked,players:plan.players?.map(p=>[p.x,p.y])||[],markRadius:plan.mark?.r||0});
       if(safe&&!spots.length){result.stay=true;result.label='副本｜安全圈路徑無法確認，請檢查位置';result.ready=false;return result;}
@@ -369,15 +397,23 @@ function installRaidMechanics(book) {
       }
       if(!result.stay&&plan.target){
         const key=plan.kind+':'+Math.round(plan.target.x/32)+','+Math.round(plan.target.y/32);
-        if(cache.pathKey!==key||now-cache.pathAt>300||!cache.path?.length){cache.pathKey=key;cache.pathAt=now;const corridor=raidFixedCorridorPath(game,definition,s,plan.target,plan.kind,cache,pathTo);cache.path=corridor.path;cache.fixedRouteUsed=corridor.fixed;cache.fixedNodeIndex=corridor.nodeIndex;cache.fixedNodeCount=corridor.nodeCount;}
-        if(cache.fixedRouteUsed)result.label='尼德霍格｜固定節點 '+(cache.fixedNodeIndex||'—')+'/'+(cache.fixedNodeCount||'—')+' · '+plan.label;
+        if(cache.pathKey!==key||now-cache.pathAt>300||!cache.path?.length){cache.pathKey=key;cache.pathAt=now;const corridor=raidFixedCorridorPath(game,definition,s,plan.target,plan.kind,cache,pathTo);cache.path=corridor.path;cache.fixedRouteUsed=corridor.fixed;cache.fixedNodeIndex=corridor.nodeIndex;cache.fixedNodeCount=corridor.nodeCount;cache.fixedContinuous=corridor.continuous;}
+        if(cache.fixedRouteUsed)result.label='尼德霍格｜固定通道 · '+plan.label;
         if(cache.path?.length){
           let nearest=0;for(let i=1;i<cache.path.length;i++)if(Math.hypot(cache.path[i].x-player.x,cache.path[i].y-player.y)<Math.hypot(cache.path[nearest].x-player.x,cache.path[nearest].y-player.y)&&(!game.walk?.lineClear||game.walk.lineClear(player.x,player.y,cache.path[i].x,cache.path[i].y)))nearest=i;
           if(nearest)cache.path=cache.path.slice(nearest);
           while(cache.path.length&&Math.hypot(cache.path[0].x-player.x,cache.path[0].y-player.y)<=(rid==='r4'?8:18))cache.path.shift();
         }
         const step=cache.path?.[0];
-        if(step){result.waypoint=[step.x,step.y];if(rid==='r4'){result.tightPath=true;result.pulseMs=40;}}else {result.stay=true;result.label+='（等待可通行路徑）';}
+        if(step){result.waypoint=[step.x,step.y];if(rid==='r4'){
+          result.tightPath=true;
+          const elapsed=now-(cache.motionAt||now),rate=elapsed>0?Math.max(.5,Math.min(4,(game.time-(cache.motionTime??game.time))*1000/elapsed)):(cache.motionRate||1);
+          cache.motionAt=now;cache.motionTime=game.time;cache.motionRate=rate;
+          const speed=Math.max(80,(game.classDef?.speed||180)*1.3*(game.stats?.speedMult||1)*(1+(game.buffValue?.('speed')||0))*(1-(game.buffValue?.('slow')||0)))*rate;
+          const distance=Math.hypot(step.x-player.x,step.y-player.y);
+          result.routeReach=cache.fixedContinuous?120:24;
+          result.pulseMs=Math.max(16,Math.min(cache.fixedContinuous?220:70,distance/speed*700));
+        }}else {result.stay=true;result.label+='（等待可通行路徑）';}
       }
       return result;
     }catch{return {enabled:true,ready:false,label:'副本｜機制資料暫不可用，等待更新'};}
@@ -3578,7 +3614,7 @@ function maintainNativeMemory(game,root,now=Date.now()) {
     }
     readHazards(z);
     if (!direction) return;
-    try { (() => { const root = document.documentElement; if (!z?.player || performance.now() - Number(root.dataset.roHelperLast || 0) < 100) return false; const {x,y} = z.player; const raidMechanics=window.__roHelperRaidMechanics?.(z)||null; const partyLeader = readPartyLeader(z, performance.now()); const cleanup = victoryCleanup(z,root.dataset,Date.now(),victoryEmptySince,location.hostname !== "ro.hans-webgametw.com"); watchLocalPickups(z,root.dataset,pickupWatch); const finalBoss = activeFinalBoss(z); const gearWaypoint = !finalBoss && root.dataset.roHelperTimedMagnet!=='on' && root.dataset.roHelperStationaryMagnet!=='on' && readGearWaypoint(z,cleanup || root.dataset.roHelperBossCleanup==='on',gearPaths,performance.now()); const prioritizeMagnet = root.dataset.roHelperPriorityMagnet==='on'; const magnetCleanup = cleanup || root.dataset.roHelperBossCleanup==='on'; const magnetWaypoint = !finalBoss && (prioritizeMagnet || (magnetCleanup && z.pickups.some(e=>!e.dead&&(e.kind==='loot'||e.kind==='card')))) ? readGearWaypoint(z,Boolean(magnetCleanup),magnetPaths,performance.now(),true) : null; const waypoint = (prioritizeMagnet && magnetWaypoint) || gearWaypoint || magnetWaypoint; const reach = raidMechanics?.tightPath && raidMechanics.waypoint ? Math.max(6,Math.min(24,Math.hypot(raidMechanics.waypoint[0]-x,raidMechanics.waypoint[1]-y))) : waypoint ? Math.max(24,Math.min(60,Math.hypot(waypoint.x-x,waypoint.y-y))) : 60; const routes = [[1,0],[0,1],[-1,0],[0,-1],[1,-1],[1,1],[-1,1],[-1,-1]].map(([dx,dy]) => { const length=Math.hypot(dx,dy); const [vx,vy]=direction(dx/length,dy/length); const clearAt = length => [.2,.4,.6,.8,1].every(fraction=>{const step=length*fraction;const tx=x+vx*step,ty=y+vy*step;return tx>=z.bounds.x0&&tx<=z.bounds.x1&&ty>=z.bounds.y0&&ty<=z.bounds.y1&&(!z.walk||z.walk.walkable(tx,ty))});const distance = [reach,reach/2,reach/4].find(clearAt) || reach; return [x+vx*distance,y+vy*distance,clearAt(distance)] }); const nearby=e=>!e.dead&&Math.hypot(e.x-x,e.y-y)<520; root.dataset.roHelperLive=JSON.stringify({at:Date.now(),battleSeconds:z.time,stageId:z.stageId,lap:Number(z.difficulty?.lap)||1,baseLevel:z.charExp?.level,expeditionFlags:{story:Boolean(z.story),endless:Boolean(z.endless)},runBaseExp:z.endless ? null : z.charExp?.base,bossFarm:{intruderId:z.script?.intruder?.id||null,gear:root.dataset.roHelperBossCleanup==='on'?z.pickups.filter(e=>!e.dead&&(e.kind==='loot'||e.kind==='card')).map(e=>[e.kind,e.x,e.y]):null,solo:!z.coop&&!z.story&&!z.endless,playing:z.state==='playing',bosses:(z.bosses||[]).filter(e=>e.def?.boss).map(e=>[e.def.id,e.def.name]),kills:Object.fromEntries([...new Set([...(z.script?.bosses||[]).map(e=>e.id),...(z.script?.intruder?.id?[z.script.intruder.id]:[]),...(z.bosses||[]).map(e=>e.def?.id).filter(Boolean)])].map(id=>[id,z.killsBy?.get(id)||0])),maze:z.stageId==='maze'?(z.script?.bosses||[]).map(e=>[e.id,e.t]):[]},skillTargets:Object.fromEntries((z.weapons||[]).flatMap(weapon=>{if(typeof weapon.id!=='string')return [];try{const mod=weapon.mod?.(z);const bonus=(weapon.up?.targets||0)+(mod?.targets||0);const count=weapon.countUnit?.()==='objetivo'&&mod?.count>0?mod.count:bonus>0?1+bonus:weapon.targets?.(z);return Number.isSafeInteger(count)&&count>0?[[weapon.id,count]]:[]}catch{return []}})),discoveryBonus:Number.isFinite(z.stats?.discovery)?z.stats.discovery:null,lootRunId:publishLootSnapshot(z),player:[x,y],raidMechanics,raidWaypoint:raidMechanics?.enabled?raidMechanics.waypoint:readRaidWaypoint(z),finalBoss:finalBoss ? [finalBoss.x,finalBoss.y] : null,...partyLeader,cleanup,gearWaypoint,magnetWaypoint,routes,zeny:z.zeny,chestCost:z.chestCost(),hazards:readHazards(z),enemyShots:sampleEnemyShots(z,enemyShotCache),bell:readBell(z),enemies:z.enemies.filter(nearby).map(e=>[e.x,e.y]),drops:z.pickups.filter(e=>!e.dead&&(e.kind==='loot'||e.kind==='card'||e.kind==='magnet'||Math.hypot(e.x-x,e.y-y)<650)).map(e=>[e.kind,e.x,e.y])});root.dataset.roHelperLast=String(performance.now());return false })(); setPhase(""); delete document.documentElement.dataset.roHelperError; } catch (error) {
+    try { (() => { const root = document.documentElement; if (!z?.player || performance.now() - Number(root.dataset.roHelperLast || 0) < 100) return false; const {x,y} = z.player; const raidMechanics=window.__roHelperRaidMechanics?.(z)||null; const partyLeader = readPartyLeader(z, performance.now()); const cleanup = victoryCleanup(z,root.dataset,Date.now(),victoryEmptySince,location.hostname !== "ro.hans-webgametw.com"); watchLocalPickups(z,root.dataset,pickupWatch); const finalBoss = activeFinalBoss(z); const gearWaypoint = !finalBoss && root.dataset.roHelperTimedMagnet!=='on' && root.dataset.roHelperStationaryMagnet!=='on' && readGearWaypoint(z,cleanup || root.dataset.roHelperBossCleanup==='on',gearPaths,performance.now()); const prioritizeMagnet = root.dataset.roHelperPriorityMagnet==='on'; const magnetCleanup = cleanup || root.dataset.roHelperBossCleanup==='on'; const magnetWaypoint = !finalBoss && (prioritizeMagnet || (magnetCleanup && z.pickups.some(e=>!e.dead&&(e.kind==='loot'||e.kind==='card')))) ? readGearWaypoint(z,Boolean(magnetCleanup),magnetPaths,performance.now(),true) : null; const waypoint = (prioritizeMagnet && magnetWaypoint) || gearWaypoint || magnetWaypoint; const reach = raidMechanics?.tightPath && raidMechanics.waypoint ? Math.max(6,Math.min(raidMechanics.routeReach||24,Math.hypot(raidMechanics.waypoint[0]-x,raidMechanics.waypoint[1]-y))) : waypoint ? Math.max(24,Math.min(60,Math.hypot(waypoint.x-x,waypoint.y-y))) : 60; const routes = [[1,0],[0,1],[-1,0],[0,-1],[1,-1],[1,1],[-1,1],[-1,-1]].map(([dx,dy]) => { const length=Math.hypot(dx,dy); const [vx,vy]=direction(dx/length,dy/length); const clearAt = length => [.2,.4,.6,.8,1].every(fraction=>{const step=length*fraction;const tx=x+vx*step,ty=y+vy*step;return tx>=z.bounds.x0&&tx<=z.bounds.x1&&ty>=z.bounds.y0&&ty<=z.bounds.y1&&(!z.walk||z.walk.walkable(tx,ty))});const distance = [reach,reach/2,reach/4].find(clearAt) || reach; return [x+vx*distance,y+vy*distance,clearAt(distance)] }); const nearby=e=>!e.dead&&Math.hypot(e.x-x,e.y-y)<520; root.dataset.roHelperLive=JSON.stringify({at:Date.now(),battleSeconds:z.time,stageId:z.stageId,lap:Number(z.difficulty?.lap)||1,baseLevel:z.charExp?.level,expeditionFlags:{story:Boolean(z.story),endless:Boolean(z.endless)},runBaseExp:z.endless ? null : z.charExp?.base,bossFarm:{intruderId:z.script?.intruder?.id||null,gear:root.dataset.roHelperBossCleanup==='on'?z.pickups.filter(e=>!e.dead&&(e.kind==='loot'||e.kind==='card')).map(e=>[e.kind,e.x,e.y]):null,solo:!z.coop&&!z.story&&!z.endless,playing:z.state==='playing',bosses:(z.bosses||[]).filter(e=>e.def?.boss).map(e=>[e.def.id,e.def.name]),kills:Object.fromEntries([...new Set([...(z.script?.bosses||[]).map(e=>e.id),...(z.script?.intruder?.id?[z.script.intruder.id]:[]),...(z.bosses||[]).map(e=>e.def?.id).filter(Boolean)])].map(id=>[id,z.killsBy?.get(id)||0])),maze:z.stageId==='maze'?(z.script?.bosses||[]).map(e=>[e.id,e.t]):[]},skillTargets:Object.fromEntries((z.weapons||[]).flatMap(weapon=>{if(typeof weapon.id!=='string')return [];try{const mod=weapon.mod?.(z);const bonus=(weapon.up?.targets||0)+(mod?.targets||0);const count=weapon.countUnit?.()==='objetivo'&&mod?.count>0?mod.count:bonus>0?1+bonus:weapon.targets?.(z);return Number.isSafeInteger(count)&&count>0?[[weapon.id,count]]:[]}catch{return []}})),discoveryBonus:Number.isFinite(z.stats?.discovery)?z.stats.discovery:null,lootRunId:publishLootSnapshot(z),player:[x,y],raidMechanics,raidWaypoint:raidMechanics?.enabled?raidMechanics.waypoint:readRaidWaypoint(z),finalBoss:finalBoss ? [finalBoss.x,finalBoss.y] : null,...partyLeader,cleanup,gearWaypoint,magnetWaypoint,routes,zeny:z.zeny,chestCost:z.chestCost(),hazards:readHazards(z),enemyShots:sampleEnemyShots(z,enemyShotCache),bell:readBell(z),enemies:z.enemies.filter(nearby).map(e=>[e.x,e.y]),drops:z.pickups.filter(e=>!e.dead&&(e.kind==='loot'||e.kind==='card'||e.kind==='magnet'||Math.hypot(e.x-x,e.y-y)<650)).map(e=>[e.kind,e.x,e.y])});root.dataset.roHelperLast=String(performance.now());return false })(); setPhase(""); delete document.documentElement.dataset.roHelperError; } catch (error) {
       document.documentElement.dataset.roHelperError = error.message;
     }
   },100);
@@ -4565,7 +4601,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V94.1 網頁控制特別版";
+  const versionName = "Gear V94.2 網頁控制特別版";
   let automationMode="normal";
   const raidCompletion={entered:false,finished:false};
   const compactRaidToggle=document.createElement("button");compactRaidToggle.type="button";
@@ -11201,18 +11237,18 @@ return;
   departing = false;
   delete document.documentElement.dataset.roHelperFinishVictory;
   next = result;
-}else if(stage){if(!stage.classList.contains("sel")){next=stage}else if(go&&!departing){next=go;departing=true;departureDifficultyContext={stage:baseExpeditionName(stageNameOf(stage)),lap:Number(highestLap||expeditionLap.value),account:activeAccount};if(taiwanGame) hansHighDifficultyUntil=Date.now()+30000;rotationRun=stageMode.value==="rotation"?{stage:stageName}:undefined}}else if(stageCards.length&&stageName){release();status.textContent=stageName===highestStageMode?"目前沒有可出發的一般關卡":"指定關卡目前無法出發："+stageName;return}else if(!go&&!field){departing=false;if(captain)next=captain}if(!next){if(last?.id!=="stg-go")last=undefined;const view=document.body.innerText;const battle=!visiblePicker&&!picking&&!result&&!go&&!field&&!captain&&inBattle&&!document.querySelector("#pause:not(.hidden),#npc-dialog:not(.hidden),dialog[open]")&&!document.activeElement?.matches("input,textarea,select,[contenteditable=true]");release();if(battle){const packet=readLivePacket();const stationaryMagnetOnly=!autoMove;const manualMagnetDue=updateTimedMagnet(packet,true);const manualMagnetPlan=manualMagnetAction(packet,manualMagnetDue,magnetSchedule.cleanupCollected,document.documentElement.dataset.roHelperBossCleanup==="on");if(stationaryMagnetOnly&&manualMagnetPlan==="idle"){blocked.clear();previousPosition=null;previousDirection=null;escapeDirection=-1;escapeUntil=0;status.textContent=gearPickupToggle.value==="timed"?(manualMagnetDue?"原地待命：等待可撿取的磁鐵":"原地待命：等待磁鐵間隔"):"手動移動";return}const fresh=packet&&Date.now()-packet.at>=0&&Date.now()-packet.at<750&&packet.routes?.length===route.length;if(!fresh){if(!retriedCoordinates&&!coordinateRequest&&(!coordinateConnectedAt||Date.now()-coordinateConnectedAt>3000)){retriedCoordinates=true;void connectCoordinates(false,true)}blocked.clear();previousPosition=null;previousDirection=null;escapeDirection=-1;escapeUntil=0;release();status.textContent=document.documentElement.dataset.roHelperError||document.documentElement.dataset.roHelperPhase|| (coordinateConnectedAt&&Date.now()-coordinateConnectedAt>3000?"戰鬥中未收到即時座標，走位已暫停":coordinateStatus);return}retriedCoordinates=false;
+}else if(stage){if(!stage.classList.contains("sel")){next=stage}else if(go&&!departing){next=go;departing=true;departureDifficultyContext={stage:baseExpeditionName(stageNameOf(stage)),lap:Number(highestLap||expeditionLap.value),account:activeAccount};if(taiwanGame) hansHighDifficultyUntil=Date.now()+30000;rotationRun=stageMode.value==="rotation"?{stage:stageName}:undefined}}else if(stageCards.length&&stageName){release();status.textContent=stageName===highestStageMode?"目前沒有可出發的一般關卡":"指定關卡目前無法出發："+stageName;return}else if(!go&&!field){departing=false;if(captain)next=captain}if(!next){if(last?.id!=="stg-go")last=undefined;const view=document.body.innerText;const battle=!visiblePicker&&!picking&&!result&&!go&&!field&&!captain&&inBattle&&!document.querySelector("#pause:not(.hidden),#npc-dialog:not(.hidden),dialog[open]")&&!document.activeElement?.matches("input,textarea,select,[contenteditable=true]");if(!(battle&&autoMove&&raidActive()&&document.documentElement.dataset.roHelperRaidMechanics==="on"))release();if(battle){const packet=readLivePacket();const stationaryMagnetOnly=!autoMove;const manualMagnetDue=updateTimedMagnet(packet,true);const manualMagnetPlan=manualMagnetAction(packet,manualMagnetDue,magnetSchedule.cleanupCollected,document.documentElement.dataset.roHelperBossCleanup==="on");if(stationaryMagnetOnly&&manualMagnetPlan==="idle"){blocked.clear();previousPosition=null;previousDirection=null;escapeDirection=-1;escapeUntil=0;status.textContent=gearPickupToggle.value==="timed"?(manualMagnetDue?"原地待命：等待可撿取的磁鐵":"原地待命：等待磁鐵間隔"):"手動移動";return}const fresh=packet&&Date.now()-packet.at>=0&&Date.now()-packet.at<750&&packet.routes?.length===route.length;if(!fresh){if(!retriedCoordinates&&!coordinateRequest&&(!coordinateConnectedAt||Date.now()-coordinateConnectedAt>3000)){retriedCoordinates=true;void connectCoordinates(false,true)}blocked.clear();previousPosition=null;previousDirection=null;escapeDirection=-1;escapeUntil=0;release();status.textContent=document.documentElement.dataset.roHelperError||document.documentElement.dataset.roHelperPhase|| (coordinateConnectedAt&&Date.now()-coordinateConnectedAt>3000?"戰鬥中未收到即時座標，走位已暫停":coordinateStatus);return}retriedCoordinates=false;
 if(autoMove && raidActive() && packet.raidMechanics?.enabled){
   const blockedDirections=raidRouteProgress.blocked(packet);
   if(raidRouteProgress.needsRepath())document.documentElement.dataset.roHelperRaidRepath=String(Date.now());
   const decision=chooseRaidMechanicRoute(packet,Date.now(),blockedDirections);
   raidRouteProgress.record(decision?.direction??-1);
   if(decision){status.textContent=decision.label;previousDirection=null;escapeDirection=-1;escapeUntil=0;
-    if(decision.direction>=0){held=route[decision.direction];for(const key of held)send("keydown",key);clearTimeout(movePulse);movePulse=setTimeout(release,packet.raidMechanics.pulseMs||120);}
+    if(decision.direction>=0){const nextHeld=route[decision.direction];if(!held||held.length!==nextHeld.length||held.some((key,i)=>key!==nextHeld[i])){release();held=nextHeld;for(const key of held)send("keydown",key);}clearTimeout(movePulse);movePulse=setTimeout(release,packet.raidMechanics.pulseMs||120);}else{clearTimeout(movePulse);release();}
     return;
   }
 }
-raidRouteProgress.reset();
+release();raidRouteProgress.reset();
 const collectionWaypoint = stationaryMagnetOnly && manualMagnetPlan==="cleanup" && magnetSchedule.cleanupCollected ? null : packet.magnetWaypoint;
 if(stationaryMagnetOnly && manualMagnetPlan==="cleanup"){
   const pending = document.documentElement.dataset.roHelperBossCleanup==="on" ? packet.bossFarm?.gear : packet.cleanup?.gear;
