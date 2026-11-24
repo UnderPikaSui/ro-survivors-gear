@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 89.0
+// @version 90.0
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -175,16 +175,33 @@ function planRaidObjective(s,definition,player,targets,now,spots) {
   const objective=sorted.find(t=>t.kind==='obj');
   if(objective)return {kind:'obj',label:'副本｜優先完成分區任務物件',target:objective,radius:130,stay:distance(objective)<=130,marked,players,mark};
   if(s.next?.at)return {kind:'next',label:'副本｜通過已開啟的門前往下一區',target:point(s.next.at),stay:false,marked,players,mark};
+  if(zi&&!zi.boss&&zi.need>0&&zi.kills<zi.need)return {kind:'kills',label:'副本｜小怪任務：前往傳送點等待',target:null,stay:true,marked,players,mark};
   const source=sorted.find(t=>t.kind==='src');
   if(source)return {kind:'source',label:'副本｜優先處理補血源',target:source,radius:130,stay:distance(source)<=130,marked,players,mark};
   const boss=alive.find(t=>t.kind==='boss'),blocked=boss&&s.shield>now;
   const chosen=sorted.find(t=>!(t.kind==='boss'&&blocked));
   if(chosen)return {kind:chosen.kind,label:chosen.kind==='obj'?'副本｜優先拆物件／蛋／蠅巢':chosen.kind==='boss'?'副本｜攻擊首領並躲招':'副本｜清除分區精英／中王',target:chosen,radius:130,stay:distance(chosen)<=130,marked,players,mark};
   if(blocked){const d=distance(boss),dx=(player.x-boss.x)/(d||1),dy=(player.y-boss.y)/(d||1);return {kind:'shield',label:'副本｜護盾期間退開躲招',target:{x:boss.x+(d?dx:1)*650,y:boss.y+(d?dy:0)*650},stay:d>=600,marked,players,mark};}
-  if(zi&&zi.need>0&&zi.kills<zi.need)return {kind:'kills',label:'副本｜清怪達成分區擊殺數',target:null,stay:false,marked,players,mark};
   return {kind:'wait',label:'副本｜等待分區目標與隊友',target:null,stay:true,marked,players,mark};
 }
 
+function raidKillWaitPoint(game,definition,state,layout){
+  const walk=game.walk,player=game.player,zone=definition.zones[state.zone];
+  if(!walk?.pathTo||!player||!layout||!zone?.next)return null;
+  const {w,h,labels}=layout,label=zone.reuse??state.zone,nextLabel=definition.zones[state.zone+1]?.reuse??state.zone+1;
+  const room=a=>Array.isArray(a)&&a[0]>=0&&a[1]>=0&&a[0]<w&&a[1]<h?labels[Math.floor(a[1])*w+Math.floor(a[0])]:-1;
+  const portals=(walk.warpFrom||[]).filter((from,i)=>room(from)===label&&room(walk.warpTo?.[i])===nextLabel);
+  if(!portals.length)for(const [x0,y0,x1,y1] of zone.door?.cells||[])portals.push([(x0+x1)/2,(y0+y1)/2]);
+  const candidates=[];
+  for(const portal of portals){const px=(portal[0]+.5)*32,py=(portal[1]+.5)*32;
+    for(let i=0;i<16;i++){const a=i*Math.PI/8,x=px+Math.cos(a)*128,y=py+Math.sin(a)*128;
+      if(room([Math.floor(x/32),Math.floor(y/32)])!==label||walk.warpAt&&walk.warpCells?.[Math.floor(y/32)*w+Math.floor(x/32)])continue;
+      const path=walk.pathTo(player.x,player.y,x,y),end=path?.at(-1);
+      if(end&&Math.hypot(end.x-x,end.y-y)<=48)candidates.push({x,y});
+    }
+  }
+  return candidates.sort((a,b)=>Math.hypot(a.x-player.x,a.y-player.y)-Math.hypot(b.x-player.x,b.y-player.y))[0]||null;
+}
 function installRaidMechanics(book) {
   if(location.hostname!=="ro.hans-webgametw.com"||window.__roHelperRaidMechanics)return;
   const observer=createRaidMechanismObserver(),telegraphs=new WeakMap(),games=new WeakMap();
@@ -269,13 +286,16 @@ function installRaidMechanics(book) {
       if(key!==cache.safeKey){cache.safeKey=key;cache.spots=safe?raidSafeSpots(definition,cache.layout,safe.seed,safe.n,safe.r):[];}
       const spots=cache.spots.filter(q=>Math.hypot(q.x-player.x,q.y-player.y)<(safe?.r||0)||pathTo(q));
       const plan=planRaidObjective(s,definition,player,targets,serverNow,spots);
+      if(plan.kind==='kills'){
+        const waitKey=s.zone+":"+(game.walk?.warpsKey||"");
+        if(cache.killWaitKey!==waitKey||now-(cache.killWaitAt||0)>5000){cache.killWaitKey=waitKey;cache.killWaitAt=now;cache.killWaitPoint=raidKillWaitPoint(game,definition,s,cache.layout);}
+        const wait=cache.killWaitPoint;
+        plan.target=wait;plan.radius=40;plan.stay=!wait||Math.hypot(wait.x-player.x,wait.y-player.y)<=40;
+        plan.label=wait?'副本｜小怪任務：傳送點前等待清怪完成':'副本｜小怪任務：等待傳送點位置，不追怪';
+      }
       Object.assign(result,{ready:true,kind:plan.kind,label:plan.label,stay:!!plan.stay,target:plan.target?[plan.target.x,plan.target.y]:null,radius:plan.radius||0,marked:plan.marked,players:plan.players?.map(p=>[p.x,p.y])||[],markRadius:plan.mark?.r||0});
       if(safe&&!spots.length){result.stay=true;result.label='副本｜安全圈路徑無法確認，請檢查位置';result.ready=false;return result;}
       if(plan.mark){for(const slot of plan.mark.who){if(slot===s.me)continue;const p=s.players.get(slot);if(p&&!(p.flags&1))result.hazards.push(['circle',p.x,p.y,plan.mark.r*2,plan.mark.r*2,0,0]);}}
-      if(plan.kind==='kills'){
-        const mobs=(game.enemies||[]).filter(e=>!e.dead&&e.roLocal).sort((a,b)=>Math.hypot(a.x-player.x,a.y-player.y)-Math.hypot(b.x-player.x,b.y-player.y));
-        for(const mob of mobs.slice(0,8)){if(Math.hypot(mob.x-player.x,mob.y-player.y)<=130){result.stay=true;break;}if(pathTo(mob)){plan.target=mob;break;}}
-      }
       if(safe)for(const q of cache.spots)result.neutral.push(['circle',q.x,q.y,safe.r*2,safe.r*2,0,0]);
       if(s.zi?.hold){
         const h=s.zi?.hold,raw=h?.at||definition.zones[s.zone]?.hold?.at,ats=Array.isArray(raw?.[0])?raw:raw?[raw]:[];
@@ -4436,7 +4456,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V89.0 網頁控制特別版";
+  const versionName = "Gear V90.0 網頁控制特別版";
   let automationMode="normal";
   const raidCompletion={entered:false,finished:false};
   const compactRaidToggle=document.createElement("button");compactRaidToggle.type="button";
