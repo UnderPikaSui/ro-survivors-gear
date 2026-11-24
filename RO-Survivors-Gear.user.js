@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 92.1
+// @version 92.2
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -158,14 +158,23 @@ function planRaidObjective(s,definition,player,targets,now,spots) {
   if(hold&&!zi.boss&&zi.z===s.zone){
     const each=!!hold.each,complete=each?(hold.accs||[]).map(a=>a>=hold.secs):[hold.acc>=hold.secs];
     const raw=hold.at||zone?.hold?.at,ats=Array.isArray(raw?.[0])?raw:raw?[raw]:[];
-    const unfinished=ats.map((a,i)=>({...point(a),index:i})).filter(q=>!complete[each?q.index:0]);
+    const points=ats.map((a,i)=>({...point(a),index:i})),unfinished=points.filter(q=>!complete[each?q.index:0]);
     if(unfinished.length){
       const ids=[s.me,...players.map(p=>p.slot)].sort((a,b)=>a-b),rank=Math.max(0,ids.indexOf(s.me));
-      let q=each?unfinished[rank%unfinished.length]:unfinished[0];
       const r=Math.max(32,(hold.r||zone?.hold?.r||4)*32-32);
-      // Keep an occupied unfinished seal stable; excess people spread in slot order.
-      if(each){const current=unfinished.find(p=>distance(p)<=r);if(current){const inside=[s.me,...players.filter(p=>Math.hypot(p.x-current.x,p.y-current.y)<=r).map(p=>p.slot)].sort((a,b)=>a-b);if(inside[0]===s.me)q=current;}}
-      return {kind:'hold',label:each?'副本｜分散守未完成封印（等待隊友同時守點）':'副本｜站在據點內守點',target:q,radius:r,stay:distance(q)<=r,marked,players,mark};
+      let q=unfinished[0];
+      if(each){
+        // A completed seal must remain occupied when fewer unfinished seals remain
+        // than the native simultaneous-occupancy requirement.
+        const need=Math.min(points.length,Math.max(1,Math.trunc(hold.need)||2)),active=unfinished.slice();
+        for(const p of points)if(active.length<need&&complete[p.index])active.push(p);
+        const people=[{slot:s.me,x:player.x,y:player.y},...players];
+        const owners=active.map(p=>people.filter(v=>Math.hypot(v.x-p.x,v.y-p.y)<=r).sort((a,b)=>a.slot-b.slot)[0]?.slot);
+        const mine=owners.indexOf(s.me),claimed=new Set(owners.filter(v=>v!==undefined));
+        if(mine>=0)q=active[mine];
+        else{const empty=active.filter((p,i)=>owners[i]===undefined),free=ids.filter(id=>!claimed.has(id)),i=Math.max(0,free.indexOf(s.me));q=empty.length?empty[i%empty.length]:active[rank%active.length];}
+      }
+      return {kind:'hold',label:each?'副本｜分守封印，保留已完成站點維持同時有人':'副本｜站在據點內守點',target:q,radius:r,stay:distance(q)<=r,marked,players,mark};
     }
   }
   const alive=targets.filter(t=>t.alive);
@@ -242,7 +251,7 @@ function installRaidMechanics(book) {
       if(!game?.player||!window.RO_RAID?.inRaid?.()||document.documentElement.dataset.roHelperRaidMechanics!=='on')return null;
       const s=observer.state,rid=s.rid||/^raid_(r[1-8])$/.exec(game.stageId||'')?.[1],definition=book[rid];
       if(!definition)return {enabled:true,ready:false,label:'副本｜無法辨識副本機制，等待資料'};
-      let cache=games.get(game);if(!cache){cache={layout:raidZoneLayout(game,definition),at:0,safeKey:'',spots:[],pathAt:0,pathKey:'',path:null};games.set(game,cache);}
+      let cache=games.get(game);if(!cache||cache.rid!==rid||cache.walk!==game.walk||cache.mask!==game.walk?.mask){cache={rid,walk:game.walk,mask:game.walk?.mask,layout:raidZoneLayout(game,definition),at:0,safeKey:'',spots:[],pathAt:0,pathKey:'',path:null};games.set(game,cache);}
       if(!cache.layout&&game.walk?.mask)cache.layout=raidZoneLayout(game,definition);
       const now=Date.now(),serverNow=now+s.skew;
       if(cache.at&&now-cache.at<90)return cache.result;
@@ -263,14 +272,15 @@ function installRaidMechanics(book) {
       }
       const pathTo=target=>{
         if(!target||![target.x,target.y].every(Number.isFinite)||!game.walk?.pathTo)return null;
+        const tolerance=target.kind==='obj'||target.kind==='src'?130:80;
         const end=game.walk.nearestWalkable?.(target.x,target.y)||[target.x,target.y];
-        if(Math.hypot(end[0]-target.x,end[1]-target.y)>64)return null;
+        if(Math.hypot(end[0]-target.x,end[1]-target.y)>tolerance)return null;
         const direct=game.walk.pathTo(player.x,player.y,...end);
-        if(direct?.length&&Math.hypot(direct.at(-1).x-target.x,direct.at(-1).y-target.y)<=80)return direct.slice();
+        if(direct?.length&&Math.hypot(direct.at(-1).x-target.x,direct.at(-1).y-target.y)<=tolerance)return direct.slice();
         // The native raid maps use open warp doors between disconnected rooms.
         // Follow only the first physical leg; recompute after the actual teleport.
         const legs=game.walk.route?.(player.x,player.y,...end),last=legs?.at(-1)?.at(-1);
-        if(!last||Math.hypot(last.x-target.x,last.y-target.y)>80||!legs[0]?.length)return null;
+        if(!last||Math.hypot(last.x-target.x,last.y-target.y)>tolerance||!legs[0]?.length)return null;
         return legs[0].slice();
       };
       const entityById=new Map((game.enemies||[]).filter(e=>!e.dead&&e.roT).map(e=>[String(e.roT),e]));
@@ -279,11 +289,23 @@ function installRaidMechanics(book) {
         const ok=!!pathTo(t);if(cache.reachable.size>=48)cache.reachable.delete(cache.reachable.keys().next().value);cache.reachable.set(key,{at:now,ok});return ok;};
       const targetInZone=t=>{
         if(!s.zi||!cache.layout)return true;
-        const cx=t.at[0],cy=t.at[1],{w,h,labels}=cache.layout,lab=definition.zones[s.zone]?.reuse??s.zone;
-        if(cx<0||cy<0||cx>=w||cy>=h)return false;const own=labels[cy*w+cx];return own<0||own===lab;
+        const entity=entityById.get(t.id),cx=Math.floor((entity?.x??(t.at[0]+.5)*32)/32),cy=Math.floor((entity?.y??(t.at[1]+.5)*32)/32),{w,h,labels}=cache.layout,lab=definition.zones[s.zone]?.reuse??s.zone;
+        if(cx<0||cy<0||cx>=w||cy>=h)return false;const own=labels[cy*w+cx];
+        if(own<0||own===lab)return true;
+        // Native live task objects can be placed at room boundaries: a direct physical
+        // path in this room is stronger evidence than a cached flood-fill label.
+        if(entity&&(t.kind==='obj'||t.kind==='src')){
+          const end=game.walk?.nearestWalkable?.(entity.x,entity.y)||[entity.x,entity.y];
+          const path=game.walk?.pathTo?.(player.x,player.y,...end),last=path?.at(-1);
+          return !!last&&Math.hypot(last.x-entity.x,last.y-entity.y)<=130;
+        }
+        return false;
       };
-      const targets=[...s.targets.values()].filter(t=>t.alive&&t.at&&targetInZone(t)).map(t=>{const e=entityById.get(t.id);return {...t,x:e?.x??(t.at[0]+.5)*32,y:e?.y??(t.at[1]+.5)*32};})
-        .sort((a,b)=>Math.hypot(a.x-player.x,a.y-player.y)-Math.hypot(b.x-player.x,b.y-player.y)).slice(0,16).filter(t=>Math.hypot(t.x-player.x,t.y-player.y)<140||reachable(t));
+      const tracked=new Map(s.targets);
+      for(const [id,e] of [...entityById].slice(0,128))if(!tracked.has(id))tracked.set(id,{id,alive:true,kind:e.def?.boss?'mid':'obj',at:[e.x/32-.5,e.y/32-.5]});
+      const priority=t=>t.kind==='obj'?0:t.kind==='src'?1:2;
+      const targets=[...tracked.values()].filter(t=>t.alive&&t.at&&targetInZone(t)).map(t=>{const e=entityById.get(t.id);return {...t,x:e?.x??(t.at[0]+.5)*32,y:e?.y??(t.at[1]+.5)*32};})
+        .sort((a,b)=>priority(a)-priority(b)||Math.hypot(a.x-player.x,a.y-player.y)-Math.hypot(b.x-player.x,b.y-player.y)).slice(0,32).filter(t=>Math.hypot(t.x-player.x,t.y-player.y)<140||reachable(t));
       const safe=s.safe&&s.safe.until>serverNow?s.safe:null,key=safe?JSON.stringify(safe):'';
       if(key!==cache.safeKey){cache.safeKey=key;cache.spots=safe?raidSafeSpots(definition,cache.layout,safe.seed,safe.n,safe.r):[];}
       const spots=cache.spots.filter(q=>Math.hypot(q.x-player.x,q.y-player.y)<(safe?.r||0)||pathTo(q));
@@ -4463,7 +4485,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V92.1 網頁控制特別版";
+  const versionName = "Gear V92.2 網頁控制特別版";
   let automationMode="normal";
   const raidCompletion={entered:false,finished:false};
   const compactRaidToggle=document.createElement("button");compactRaidToggle.type="button";
