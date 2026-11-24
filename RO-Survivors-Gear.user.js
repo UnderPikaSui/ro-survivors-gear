@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 94.4
+// @version 95.0
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -219,6 +219,10 @@ function raidKillWaitPoint(game,definition,state,layout){
 function raidFixedCorridorPath(game,definition,state,target,kind,cache,pathTo){
   const fixed=definition.fixedNodes,player=game.player;
   if(state.rid!=='r4'||!fixed||['bell','curse','mark','shield'].includes(kind))return {path:pathTo(target),fixed:false};
+  if(['hold','obj','elite','mid','source','src'].includes(kind)){
+    cache.fixedDetour=true;
+    return {path:pathTo(target),fixed:false};
+  }
   let name;
   if(kind==='next'){const z=state.next?.zone??state.zone;name=z===1?'cross0':z===2?'cross1':z===3?'portal2':null;
     if(name==='portal2'&&Math.hypot(player.x-target.x,player.y-target.y)<130)return {path:pathTo(target),fixed:false};
@@ -239,28 +243,36 @@ function raidFixedCorridorPath(game,definition,state,target,kind,cache,pathTo){
     }
     raw=available;if(!raw.length)return {path:null,fixed:true};
   }
-  const branch=!['kills','next','hold','boss'].includes(kind),key=name+':'+raw.length+(branch?':'+(target.id||kind):'');
+  const key=name+':'+raw.length+':'+raw.at(-1).join(',');
   cache.fixedNodeRuns??=new Map();let run=cache.fixedNodeRuns.get(key);
-  if(!run){
-    let points=raw.map(([x,y])=>({x:(x+.5)*32,y:(y+.5)*32}));
-    if(branch){
-      const best=points.map((p,i)=>({p,i,d:Math.hypot(p.x-target.x,p.y-target.y)})).sort((a,b)=>a.d-b.d);
-      let joined=false;
-      for(const {p,i} of best.slice(0,8)){const tail=pathTo(target,p),end=tail?.at(-1);if(end&&Math.hypot(end.x-target.x,end.y-target.y)<=130){points=[...points.slice(0,i+1),...tail];joined=true;break;}}
-      if(!joined)return {path:null,fixed:true};
+  const points=raw.map(([x,y])=>({x:(x+.5)*32,y:(y+.5)*32}));
+  if(cache.fixedDetour){
+    // Rejoin a reachable projection on the corridor, not spawn or every old node.
+    let best=null;
+    for(let i=1;i<points.length;i++){
+      const a=points[i-1],b=points[i],dx=b.x-a.x,dy=b.y-a.y,n=dx*dx+dy*dy;
+      const t=n?Math.max(0,Math.min(1,((player.x-a.x)*dx+(player.y-a.y)*dy)/n)):0;
+      const q={x:a.x+dx*t,y:a.y+dy*t};
+      const direct=!game.walk?.lineClear||game.walk.lineClear(player.x,player.y,q.x,q.y),join=direct?[q]:pathTo(q),last=join?.at(-1);
+      if(!last||Math.hypot(last.x-q.x,last.y-q.y)>48)continue;
+      let cost=0,from=player;for(const v of join){cost+=Math.hypot(v.x-from.x,v.y-from.y);from=v;}
+      if(!best||cost<best.cost-1||Math.abs(cost-best.cost)<=1&&i>best.index)best={q,index:i,cost,join};
     }
+    if(!best)return {path:null,fixed:false};
+    if(Math.hypot(player.x-best.q.x,player.y-best.q.y)>20)return {path:best.join,fixed:false};
+    run={points,index:best.index};cache.fixedNodeRuns.set(key,run);cache.fixedDetour=false;
+  }
+  if(!run){
     let index=0;const previous=cache.fixedNodeRuns.get(cache.lastFixedNodeKey);
-    if(previous){let common=0;while(common<Math.min(previous.points.length,points.length)&&previous.points[common].x===points[common].x&&previous.points[common].y===points[common].y)common++;index=Math.min(previous.index,Math.max(0,common-1));}
+    let common=0;if(previous)while(common<Math.min(previous.points.length,points.length)&&previous.points[common].x===points[common].x&&previous.points[common].y===points[common].y)common++;
+    if(previous&&common)index=Math.min(previous.index,common-1);
     else{
-      // Join the nearest actually reachable forward corridor, never force a return to spawn.
-      const candidates=points.map((p,i)=>({p,i,d:Math.hypot(p.x-player.x,p.y-player.y)})).sort((a,b)=>a.d-b.d).slice(0,32);
-      let best=null;
-      for(const {p,i,d} of candidates){
+      const candidates=points.map((p,i)=>({p,i,d:Math.hypot(p.x-player.x,p.y-player.y)})).sort((a,b)=>a.d-b.d).slice(0,32);let best=null;
+      for(const {p,i} of candidates){
         const direct=!game.walk?.lineClear||game.walk.lineClear(player.x,player.y,p.x,p.y),join=direct?[p]:pathTo(p),last=join?.at(-1);
         if(!last||Math.hypot(last.x-p.x,last.y-p.y)>48)continue;
         let cost=0,from=player;for(const q of join){cost+=Math.hypot(q.x-from.x,q.y-from.y);from=q;}
-        if(!best||cost<best.cost-1||Math.abs(cost-best.cost)<=1&&i>best.i)best={i,cost};
-        if(best.cost<=24)break;
+        if(!best||cost<best.cost-1||Math.abs(cost-best.cost)<=1&&i>best.i)best={i,cost};if(best.cost<=24)break;
       }
       if(!best)return {path:null,fixed:true};index=best.i;
     }
@@ -393,6 +405,7 @@ function installRaidMechanics(book) {
       if(key!==cache.safeKey){cache.safeKey=key;cache.spots=safe?raidSafeSpots(definition,cache.layout,safe.seed,safe.n,safe.r):[];}
       const spots=cache.spots.filter(q=>Math.hypot(q.x-player.x,q.y-player.y)<(safe?.r||0)||pathTo(q));
       const plan=planRaidObjective(s,definition,player,targets,serverNow,spots);
+      if(rid==='r4'&&['hold','obj','elite','mid','source','src'].includes(plan.kind))cache.fixedDetour=true;
       if(plan.kind==='kills'){
         const waitKey=s.zone+":"+(game.walk?.warpsKey||"");
         if(cache.killWaitKey!==waitKey||now-(cache.killWaitAt||0)>5000){cache.killWaitKey=waitKey;cache.killWaitAt=now;cache.killWaitPoint=raidKillWaitPoint(game,definition,s,cache.layout);}
@@ -445,8 +458,18 @@ function installRaidMechanics(book) {
       const group=g?{gid:String(g.gid??g.id??g.rid+':'+g.leader),rid:g.rid,name:g.name,leader:g.leader,min:g.min,state:g.state,open:!!g.open,
         members:(g.members||[]).slice(0,30).map(m=>({aid:m.aid,name:m.name,ready:!!m.ready,at:m.at})),
         needs:(g.needs||[]).slice(0,10).map(n=>({hard:!!n.hard,have:n.have,need:n.need}))}:null;
-      document.documentElement.dataset.roHelperRaidGroup=JSON.stringify({me:s?.meAid||0,group,pool:!!s?.pool,invite:iv?{gid:iv.gid,rid:iv.rid,from:iv.from,name:iv.name}:null});
+      document.documentElement.dataset.roHelperRaidGroup=JSON.stringify({me:s?.meAid||0,group,pool:!!s?.pool,invite:iv?{gid:iv.gid,rid:iv.rid,from:iv.from,name:iv.name}:null,infoAt:Number(s?.infoAt)||0,closed:!!s?.closed,raids:s?.info?.raids?Object.entries(s.info.raids).filter(([rid])=>/^r[1-8]$/.test(rid)).map(([rid,m])=>({rid,done:!!m?.done,why:typeof m?.why==='string'?m.why:''})):null});
     }catch{delete document.documentElement.dataset.roHelperRaidGroup;}
+  });
+  document.addEventListener('ro-helper-refresh-raid-checklist',()=>{
+    if(document.body.classList.contains('in-lobby')&&!window.RO_RAID?.inRaid?.())try{window.RO_RAIDUI?.ask?.();}catch{}
+  });
+  document.addEventListener('ro-helper-finish-raid-group',()=>{
+    if(document.documentElement.dataset.roHelperRaidFinishExit!=='on'||!document.body.classList.contains('in-lobby')||window.RO_RAID?.inRaid?.())return;
+    const leave=document.getElementById('rg-w-leave');if(!leave||leave.disabled||leave.closest('.hidden'))return;
+    const original=window.confirm;
+    try{window.confirm=function(message){return /^確定要離開團嗎？/.test(String(message))?true:original.call(window,message);};leave.click();}
+    finally{window.confirm=original;}
   });
   document.addEventListener("ro-helper-open-raid",()=>{
     if(location.hostname!=="ro.hans-webgametw.com" || !document.body.classList.contains("in-lobby"))return;
@@ -4617,9 +4640,10 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V94.4 網頁控制特別版";
+  const versionName = "Gear V95.0 網頁控制特別版";
   let automationMode="normal";
   const raidCompletion={entered:false,finished:false};
+  let raidExitAfterDone=false,raidChecklistAfter=0,raidChecklistAskedAt=0;
   const compactRaidToggle=document.createElement("button");compactRaidToggle.type="button";
   const raidStartButton=document.createElement("button");raidStartButton.type="button";
   let runtimeInvalidated = false;
@@ -4955,8 +4979,8 @@ function raidCompletionTransition(state,active,evidence){
   const raidMechanicsRow=document.createElement("label");raidMechanicsRow.append(raidMechanicsToggle," 自動處理副本機制");raidMechanicsRow.style.display="block";
   raidMechanicsToggle.onchange=()=>{writeSetting("ro-helper-raid-mechanics",raidMechanicsToggle.checked?"on":"off");refreshRaidSettings();};
   const raidReturnNormal=document.createElement("input");raidReturnNormal.type="checkbox";
-  const raidReturnNormalRow=document.createElement("label");raidReturnNormalRow.style.display="block";raidReturnNormalRow.append(raidReturnNormal," 全部副本通關後開啟普通掛機");
-  raidReturnNormalRow.title="依遊戲完整副本清單逐一參加；全部顯示今天打過並返回後才切換普通掛機，尚未完成或未達資格都不提前切換。";
+  const raidReturnNormalRow=document.createElement("label");raidReturnNormalRow.style.display="block";raidReturnNormalRow.append(raidReturnNormal," 全部可打副本完成後離隊並開啟普通掛機");
+  raidReturnNormalRow.title="依遊戲完整清單確認今日可挑戰的副本都已用完次數；戰力或等級未達者略過。隊長與隊員會離開副本團及一般隊伍，轉為單人普通掛機；副本設定保留，下次手動啟動。";
   raidReturnNormal.onchange=()=>writeSetting("ro-helper-raid-return-normal",raidReturnNormal.checked?"on":"off");
   raidStartButton.onclick=()=>toggleAutomationMode("raid");
   const raidHelp=document.createElement("small");raidHelp.textContent="回城後快速加入、準備；隊長符合條件時倒數出發。每副本每日一次，失敗也計次。";
@@ -5022,18 +5046,56 @@ function raidGroupPanelAction(snapshot,preset,now) {
     raidCleanupPending=false;return false;
   }
 
+  function raidChecklistDecision(snapshot,now,after=0){
+    const rows=snapshot?.raids;
+    if(snapshot?.closed||!Array.isArray(rows)||new Set(rows.map(r=>r.rid)).size!==8||!Number.isFinite(snapshot.infoAt)||snapshot.infoAt<after||now-snapshot.infoAt>15000)return 'unknown';
+    return rows.every(r=>r.done===true||r.why==='rdPower'||r.why==='rdLevel')?'done':'remaining';
+  }
+  function handleRaidFinishedExit(click,now){
+    document.documentElement.dataset.roHelperRaidFinishExit='on';
+    if(!document.body.classList.contains('in-lobby')||raidActive()){status.textContent='副本全部可打項目完成｜等待回廣場離隊';return true;}
+    const snapshot=readRaidGroupSnapshot();
+    if(!snapshot){status.textContent='副本完成｜等待副本團狀態確認';return true;}
+    if(snapshot.group){
+      if(snapshot.group.state==='count'){
+        const stop=document.getElementById('rg-c-stop')||document.getElementById('rg-w-stop');
+        if(stop){click(stop);status.textContent='副本完成｜取消團隊倒數後離團';return true;}
+        // Members cannot cancel the leader's countdown, but can leave the group.
+      }
+      if(!document.getElementById('rg-win'))click(document.getElementById('rg-chip-open'));
+      else if(now>=raidNextAction){raidNextAction=now+1200;document.dispatchEvent(new Event('ro-helper-finish-raid-group'));}
+      status.textContent='副本完成｜正在離開副本團';return true;
+    }
+    if(snapshot.pool){click(document.getElementById('rg-chip-x'));status.textContent='副本完成｜取消副本配對';return true;}
+    const confirmation=document.querySelector('#npc-dialog:not(.hidden)');
+    if(confirmation&&/離開隊伍|退出隊伍|Salir del grupo|Leave (?:the )?(?:party|group)|Sair do grupo/i.test(confirmation.querySelector('#npc-text')?.textContent||'')){
+      click(confirmation.querySelector('#npc-options button.primary'));status.textContent='副本完成｜確認離開一般隊伍';return true;
+    }
+    const friends=readRaidFriends();if(!friends?.ready){status.textContent='副本完成｜等待一般隊伍狀態確認';return true;}
+    if(friends.party){
+      const cancel=document.querySelector('#party-frame [data-cancel]'),leave=document.querySelector('#party-frame .pf-leave[data-leave]');
+      click(cancel||leave);status.textContent='副本完成｜正在離開一般隊伍';return true;
+    }
+    const close=document.querySelector('#raidshop:not(.hidden) #rs-close');if(close&&click(close))return true;
+    partyMode.value='off';writeSetting('ro-helper-party-role','off');refreshRollChoiceVisibility();partyWaitingUntil=0;
+    raidExitAfterDone=false;raidLeaderChecked=false;raidPartyInvited.clear();raidPresetInvited.clear();raidCountdownRecovery=null;raidCountdownRoster=null;
+    delete document.documentElement.dataset.roHelperRaidFinishExit;
+    automationMode='normal';resetRaidCompletion(raidCompletion);updateAssistantButton(true);rememberRefresh();
+    status.textContent='可打副本全部完成，已離隊並切換單人普通掛機；下次請手動啟動副本';return true;
+  }
   function handleRaidExpedition(){
     raidWaiting=false;raidWaitingText="";
     if(!taiwanGame)return false;
     const active=readRaidState(),now=Date.now();
     const evidence=readRaidCompletionEvidence(active);
     if(automationMode==="raid"){
-      if(raidCompletionTransition(raidCompletion,active,evidence)){raidLeaderChecked=false;raidCleanupPending=true;if(inventoryRun?.done)inventoryRun=undefined;}
+      if(raidCompletionTransition(raidCompletion,active,evidence)){raidChecklistAfter=now;raidChecklistAskedAt=0;raidLeaderChecked=false;raidCleanupPending=true;if(inventoryRun?.done)inventoryRun=undefined;}
     }
     const enabled=automationMode==="raid"&&raidMode.value!=="off";
     if(!enabled)return false;
     const shown=el=>!!el && !el.hidden && !el.closest(".hidden") && el.style.display!=="none";
     const click=el=>{if(!shown(el)||el.disabled||now<raidNextAction)return false;raidNextAction=now+1200;el.click();return true;};
+    if(raidExitAfterDone&&!active)return handleRaidFinishedExit(click,now);
     if(active){
       const down=shown(document.getElementById("rd-dead"));
       if(down){status.textContent="副本：倒地等待復活";return true;}
@@ -5057,12 +5119,25 @@ function raidGroupPanelAction(snapshot,preset,now) {
       raidResultSince=0;return false;
     }
     raidResultSince=0;
+    if(raidReturnNormal.checked&&raidCompletion.entered&&!active&&raidCompletion.result==='failure'){
+      // A settled loss may consume a daily attempt. The native checklist, not a
+      // fabricated success, decides whether this raid still has attempts left.
+      resetRaidCompletion(raidCompletion);raidChecklistAfter=now;raidChecklistAskedAt=0;raidCleanupPending=true;
+    }
     if(raidCompletion.entered&&!raidCompletion.proof){
       const resume=document.getElementById("rd-back");if(shown(resume))click(resume);
       status.textContent=raidCompletion.result==="failure"?"副本未通關，保持遠征模式；請手動選擇後續安排":"副本尚未確認通關，等待返回原副本";
       return true;
     }
     const preset=raidPreset(),snapshot=readRaidGroupSnapshot();
+    if(raidReturnNormal.checked&&document.body.classList.contains('in-lobby')){
+      const decision=raidChecklistDecision(snapshot,now,raidChecklistAfter);
+      if(decision==='done'){raidExitAfterDone=true;rememberRefresh();return handleRaidFinishedExit(click,now);}
+      if(decision==='unknown'){
+        if(now-raidChecklistAskedAt>=3000){raidChecklistAskedAt=now;document.dispatchEvent(new Event('ro-helper-refresh-raid-checklist'));}
+        status.textContent='副本｜正在確認所有可打副本的剩餘次數';return true;
+      }
+    }
     if(handleRaidCountdownGuard(snapshot,preset,click,now))return true;
     if(handleRaidPartyPrompt(preset,click))return true;
     if(preset.role!=='off'&&!worldBossActive()&&!snapshot?.group){
@@ -5127,11 +5202,6 @@ function raidGroupPanelAction(snapshot,preset,now) {
     const tab=shop.querySelector('[data-tab="raid"]');if(tab && !tab.classList.contains("primary")){click(tab);return true;}
     const all=shop.querySelector('[data-rgf="all"]');if(all && !all.classList.contains("primary")){click(all);return true;}
     const cards=[...shop.querySelectorAll("[data-rid].rg-card")];
-    if(raidReturnNormal.checked&&cards.length>0&&cards.every(el=>!!el.querySelector(".rg-done"))){
-      automationMode="normal";resetRaidCompletion(raidCompletion);updateAssistantButton(true);rememberRefresh();
-      const close=shop.querySelector("#rs-close");if(shown(close))click(close);
-      status.textContent="今日全部副本已完成，切換普通遠征掛機";return true;
-    }
     if(preset.role==='member'){status.textContent='預先組隊｜等待固定名單內的副本邀請；全部副本完成前不切換普通掛機';return false;}
     const eligible=cards.filter(el=>!el.classList.contains("locked")&&!el.querySelector(".rg-done")&&!/…/.test(el.querySelector(".stg-state")?.textContent||"…"));
     if((raidMode.value==="any"||raidReturnNormal.checked)&&preset.role!=="leader"){
@@ -11464,6 +11534,7 @@ void connectCoordinates(false);
     const running=Boolean(window.__roMenuHelper);
     if(running&&automationMode===mode){toggle();return;}
     automationMode=mode;resetRaidCompletion(raidCompletion);
+    if(mode==='raid'){raidExitAfterDone=false;raidChecklistAfter=Date.now();raidChecklistAskedAt=0;delete document.documentElement.dataset.roHelperRaidFinishExit;}
     if(running){updateAssistantButton(true);rememberRefresh();status.textContent=mode==="raid"?"已切換副本掛機":"已切換普通掛機";}
     else toggle();
   }
@@ -11829,7 +11900,7 @@ void connectCoordinates(false);
       refreshCheckpointAt = Date.now();
       sessionStorage.setItem(refreshStateKey,JSON.stringify({
         at:refreshCheckpointAt,account:activeAccount,character:name || refreshCharacter,
-        automationMode,raidCleanupPending,raidCompletion:{...raidCompletion},
+        automationMode,raidCleanupPending,raidExitAfterDone,raidCompletion:{...raidCompletion},
         characterSlot:Math.max(1,[...document.querySelectorAll("#charselect #slots > .slot")].findIndex(slot=>slot.classList.contains("selected"))+1),
         gpuSaver:document.documentElement.dataset.roHelperGpuSaver === "on"
       }));
@@ -11912,7 +11983,7 @@ void connectCoordinates(false);
       }
       const restoreGpuSaver = refreshRecovery.gpuSaver === true;
       automationMode=refreshRecovery.automationMode==="raid"?"raid":"normal";
-      raidCleanupPending=refreshRecovery.raidCleanupPending===true;
+      raidCleanupPending=refreshRecovery.raidCleanupPending===true;raidExitAfterDone=refreshRecovery.raidExitAfterDone===true;raidChecklistAfter=Date.now();raidChecklistAskedAt=0;
       raidCompletion.entered=!!refreshRecovery.raidCompletion?.entered;raidCompletion.proof=refreshRecovery.raidCompletion?.proof===true;raidCompletion.finished=raidCompletion.proof&&refreshRecovery.raidCompletion?.finished===true;raidCompletion.result=refreshRecovery.raidCompletion?.result||null;raidCompletion.runId=refreshRecovery.raidCompletion?.runId||null;
       refreshRecovery = null;
       toggle(true);
