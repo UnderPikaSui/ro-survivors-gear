@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 100.1
+// @version 101.0
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -4640,7 +4640,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V100.1 網頁控制特別版";
+  const versionName = "Gear V101.0 網頁控制特別版";
   let automationMode="normal";
   const raidCompletion={entered:false,finished:false};
   let raidExitAfterDone=false,raidChecklistAfter=0,raidChecklistAskedAt=0;
@@ -6041,6 +6041,11 @@ function raidGroupPanelAction(snapshot,preset,now) {
       const level=Number(sub.match(/^(?:Lv\.?|Nv\.?|Level|等級)\s*(\d+)\s*(?:→|->)/i)?.[1]);remember(name,level);
     }
     const result=evaluateSkillLevelPlan(config,priorities,skillLevelProgress.levels);
+    const configured=new Set((result.configuredNames||[]).map(normalizeSkill));
+    const ownedNonBasic=new Set(slots.filter(slot=>!slot.classList?.contains('basic')).map(slot=>slot.dataset.skill).filter(Boolean));
+    result.randomSlots=config.order==='acquireFirst'&&configured.size?Math.max(0,6-configured.size):0;
+    result.canRandomFill=result.randomSlots>0&&!result.acquisitionPending?.length&&ownedNonBasic.size<6;
+    if(result.randomSlots>0&&ownedNonBasic.size<6)result.done=false;
     result.pendingDetails=(result.pending||[]).map(name=>{const index=(config.names||priorities).findIndex(n=>skillMatches(n,name)),level=skillLevelProgress.levels.get(normalizeSkill(name));return name+'（'+(level??'未讀到')+'/'+Number(config.targets?.[index])+'）';});
     return result;
   }
@@ -6051,6 +6056,7 @@ function raidGroupPanelAction(snapshot,preset,now) {
       const missing=plan.configuredNames||plan.acquisitionPending||[];
       const fresh=cards.filter(card=>card.querySelector('.pk-ribbon')&&missing.some(name=>skillMatches(name,skillCardName(card))));
       if(fresh.length)return ranked(fresh,missing);
+      if(plan.canRandomFill){const filler=cards.filter(card=>card.querySelector('.pk-ribbon')&&skillCardName(card)&&!isBasicAttack(skillCardName(card))&&!(plan.configuredNames||[]).some(name=>skillMatches(name,skillCardName(card))));if(filler.length)return ranked(filler,[]);}
       const pending=plan.pending||[],upgrade=ranked(cards.filter(card=>pending.some(name=>skillMatches(name,skillCardName(card)))),pending);if(upgrade)return upgrade;const unlimited=plan.unlimited||[];return ranked(cards.filter(card=>unlimited.some(name=>skillMatches(name,skillCardName(card)))),unlimited);
     }
     const names=plan.order==='priority'?[plan.next]:(plan.pending||[plan.next]);
@@ -6295,7 +6301,7 @@ function raidGroupPanelAction(snapshot,preset,now) {
     if(levelOrder){levelOrder.append(new Option("未達標技能：稀有度優先","rarity"),new Option("依優先順序逐招達標","priority"),new Option("先各取得1級，再補目標（沒新技能先補等級）","acquireFirst"));levelOrder.value=levelConfig.order||"rarity";}
     const levelEnabled=skillSettings?document.createElement("input"):null;
     if(levelEnabled){levelEnabled.type="checkbox";levelEnabled.checked=!!levelConfig.enabled;
-      const row=document.createElement("label");row.append(levelEnabled," 指定等級停止選卡（0＝不限制）");form.append(row,levelOrder);}
+      const row=document.createElement("label");row.append(levelEnabled," 指定等級停止選卡（0＝不限制）");form.append(row,levelOrder);const orderHelp=document.createElement('small');orderHelp.textContent='先各取得1級：先取得已指定技能；留空的技能格會隨機補位，之後遇升級牌放逐。隨機補位不會取代尚未取得的指定技能。';const showOrderHelp=()=>{orderHelp.hidden=levelOrder.value!=='acquireFirst';};levelOrder.addEventListener('change',showOrderHelp);showOrderHelp();form.append(orderHelp);}
     const fields = Array.from({length:Math.max(skillSettings ? 6 : 5, priorities.length)}, (_, i) => {
       const row = document.createElement("label");
       row.textContent = "優先 " + (i + 1) + " ";
@@ -6689,6 +6695,10 @@ function hansEventStagesForLap(lap) {
       if (action) return action;
     }
     return null;
+  }
+  function randomFillerBanishNames(picker,plan){
+    if(plan.order!=='acquireFirst'||!(plan.randomSlots>0))return [];
+    return [...picker?.querySelectorAll('#pk-cards .pk-card')||[]].filter(card=>!card.querySelector('.pk-ribbon')).map(skillCardName).filter(name=>name&&!isBasicAttack(name)&&!(plan.configuredNames||[]).some(goal=>skillMatches(goal,name)));
   }
   function eligibleSkillBanishNames(names,config,plan,priorities){
     return names.filter(name=>{
@@ -11525,7 +11535,7 @@ const legacyTreasureName=e=>label(e).split(/\n/).map(t=>t.trim()).find(t=>t&&!/^
 const treasureName = card => treasureCardName(card,card.querySelector(".pk-name") ? "" : legacyTreasureName(card));if(chest){const seen=[...new Set([...treasureList(),...cards.map(e=>normalizeTreasure(treasureName(e))).filter(Boolean)])];writeSetting("ro-helper-treasures",JSON.stringify(seen))}else{const job=activeSkillJob();if(job?.id){const key="ro-helper-seen-skills-"+job.id;const basic=cards.map(skillCardName).filter(isBasicAttack);if(basic.length)writeSetting(key,JSON.stringify([...new Set([...readNames(key),...basic])]))}}if (!chest) {
   const picker = document.querySelector("#picker:not(.hidden):not(.closing)");
   const levelGoals=skillPlan.enabled ? skillLevelConfig() : null;
-  const eligibleBanish=eligibleSkillBanishNames(banishSkills(),levelGoals,skillPlan,skills());
+  const eligibleBanish=eligibleSkillBanishNames([...new Set([...banishSkills(),...randomFillerBanishNames(picker,skillPlan)])],levelGoals,skillPlan,skills());
   const banish = findSkillBanish(picker, eligibleBanish, banishBasic(), visible, usedBanish, boltsOnly, boltsOnly ? "" : focusSkill());
   if (banish) {
     usedBanish.add(banish.button);
