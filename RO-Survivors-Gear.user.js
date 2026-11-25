@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 98.2
+// @version 98.4
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -4640,7 +4640,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V98.2 網頁控制特別版";
+  const versionName = "Gear V98.4 網頁控制特別版";
   let automationMode="normal";
   const raidCompletion={entered:false,finished:false};
   let raidExitAfterDone=false,raidChecklistAfter=0,raidChecklistAskedAt=0;
@@ -5994,30 +5994,43 @@ function raidGroupPanelAction(snapshot,preset,now) {
   }
   const skillLevelConfig = () => { try { return JSON.parse(readSetting("ro-helper-skill-level-plan") || "{}"); } catch { return {}; } };
   function evaluateSkillLevelPlan(config, priorities, levels) {
-    if (!config.enabled) return {enabled:false,done:false};
-    const goals = (config.names || priorities).map((name,index)=>({name,target:Number(config.targets?.[index])||0})).filter(goal=>goal.name && goal.target>0);
-    if (!goals.length || !levels) return {enabled:true,done:false};
-    const pending=goals.filter(goal=>(levels.get(normalizeSkill(goal.name)) ?? 0)<goal.target);
-    return {enabled:true,done:pending.length===0,next:pending[0]?.name,pending:pending.map(goal=>goal.name),order:config.order||"rarity",reached:goals.filter(goal=>!pending.includes(goal)).map(goal=>goal.name)};
+    if(!config.enabled)return {enabled:false,done:false};
+    const goals=(config.names||priorities).map((name,index)=>({name,target:Number(config.targets?.[index])||0})).filter(g=>g.name&&g.target>0);
+    if(!goals.length||!levels)return {enabled:true,done:false};
+    const optional=new Set((config.banishNames||[]).map(normalizeSkill)),level=g=>levels.get(normalizeSkill(g.name))||0;
+    const relevant=goals.filter(g=>!optional.has(normalizeSkill(g.name))||level(g)>0);
+    const pending=relevant.filter(g=>level(g)<g.target);
+    return {enabled:true,done:relevant.length>0&&pending.length===0,next:pending[0]?.name,pending:pending.map(g=>g.name),order:config.order||'rarity',reached:goals.filter(g=>level(g)>=g.target).map(g=>g.name),ignored:goals.filter(g=>optional.has(normalizeSkill(g.name))&&level(g)===0).map(g=>g.name)};
   }
   let skillLevelProgress={signature:'',levels:new Map()};
   function resetSkillLevelProgress(){skillLevelProgress={signature:'',levels:new Map()};}
   function readSkillLevelPlan() {
-    const config=skillLevelConfig();if(!config.enabled)return {enabled:false,done:false};
+    const rawConfig=skillLevelConfig(),config={...rawConfig,banishNames:typeof banishSkills==='function'?banishSkills():rawConfig.banishNames||[]};if(!config.enabled)return {enabled:false,done:false};
     const priorities=skills(),signature=JSON.stringify([config.names||priorities,config.targets||[]]);
     if(skillLevelProgress.signature!==signature)skillLevelProgress={signature,levels:new Map()};
     const slots=[...document.querySelectorAll('#skillbar [data-skill], #lu-sockets [data-skill]')],tip=document.getElementById('skill-tip');
     const nodes=tip?[...tip.childNodes]:[],cls=tip?.className,style=tip?.getAttribute('style');
+    const remember=(name,level)=>{if(!name||!Number.isSafeInteger(level)||level<1)return;name=normalizeSkill(name);skillLevelProgress.levels.set(name,Math.max(level,skillLevelProgress.levels.get(name)||0));};
     try{for(const slot of slots){
       const level=Number(slot.querySelector('.lvl')?.textContent);if(!Number.isSafeInteger(level)||level<1)continue;
-      // Native skill IDs are stable even when a banished icon has no tooltip.
-      let name=jobSkillNames[slot.dataset.skill]?.[taiwanGame?0:1];
-      if(!name&&tip){tip.classList.add('hidden');slot.dispatchEvent(new MouseEvent('mouseover',{bubbles:true}));if(!tip.classList.contains('hidden'))name=tip.querySelector('.st-head b')?.textContent?.replace(/\s*\([^)]*\)\s*$/,'').trim();}
-      if(!name)continue;name=normalizeSkill(name);skillLevelProgress.levels.set(name,Math.max(level,skillLevelProgress.levels.get(name)||0));
+      let actual='';
+      if(tip){tip.classList.add('hidden');slot.dispatchEvent(new MouseEvent('mouseover',{bubbles:true}));if(!tip.classList.contains('hidden'))actual=tip.querySelector('.st-head b')?.textContent?.replace(/\s*\([^)]*\)\s*$/,'').trim()||'';}
+      // Use the game's live name first; retain known ID aliases only as corroboration.
+      if(actual)remember(actual,level);
+      const aliases=jobSkillNames[slot.dataset.skill];if(aliases)for(const alias of aliases)remember(alias,level);
     }}finally{if(tip){tip.replaceChildren(...nodes);tip.className=cls;if(style===null)tip.removeAttribute('style');else tip.setAttribute('style',style);}}
     // Missing unrelated icons never invalidate confirmed goals. An unobserved
     // required skill still evaluates as zero and cannot count as achieved.
-    return evaluateSkillLevelPlan(config,priorities,skillLevelProgress.levels);
+    // An upgrade offer exposes the current level (left of the arrow), even if a
+    // hidden or banished HUD icon cannot produce a tooltip. Fresh offers count zero.
+    for(const card of document.querySelectorAll('#picker:not(.hidden):not(.closing) #pk-cards .pk-card')){
+      if(card.querySelector('.pk-ribbon'))continue;
+      const name=card.querySelector('.pk-name')?.textContent.trim(),sub=card.querySelector('.pk-sub')?.textContent.normalize('NFKC').trim()||'';
+      const level=Number(sub.match(/^(?:Lv\.?|Nv\.?|Level|等級)\s*(\d+)\s*(?:→|->)/i)?.[1]);remember(name,level);
+    }
+    const result=evaluateSkillLevelPlan(config,priorities,skillLevelProgress.levels);
+    result.pendingDetails=(result.pending||[]).map(name=>{const index=(config.names||priorities).findIndex(n=>skillMatches(n,name)),level=skillLevelProgress.levels.get(normalizeSkill(name));return name+'（'+(level??'未讀到')+'/'+Number(config.targets?.[index])+'）';});
+    return result;
   }
   const banishSkills = () => readNames("ro-helper-banish-skills").map(normalizeSkill);
   const banishBasic = () => readSetting("ro-helper-banish-basic") === "on";
@@ -6283,6 +6296,7 @@ function raidGroupPanelAction(snapshot,preset,now) {
       if (banish) {
         banish.type = "checkbox";
         banish.setAttribute("aria-label", "優先 " + (i + 1) + " 取得後放逐");
+        banish.title="未抽到不阻擋達標保存；已取得則達目標後放逐，不需等待放逐成功。";
         syncBanish();
         const control = document.createElement("label");
         control.append(banish, " 取得後放逐");
@@ -9643,7 +9657,7 @@ function hansEventStagesForLap(lap) {
   const loadGoalAction=()=>{goalAction.value=readSetting("ro-helper-goal-action")==="save"?"save":"native";};loadGoalAction();
   goalAction.onchange=()=>{writeSetting("ro-helper-goal-action",goalAction.value);goalActionHelp.hidden=goalAction.value==="save";};
   const goalActionSetting=document.createElement("div"),goalActionHelp=document.createElement("small");
-  goalActionHelp.textContent="自動選會同時接管技能與寶箱；已設定條件皆達標才開啟，本局不能取消。";goalActionHelp.style.display="block";goalActionSetting.append(goalAction,goalActionHelp);
+  goalActionHelp.textContent="自動選會同時接管技能與寶箱；已設定條件達標才開啟，本局不能取消。技能等級計畫中，勾選取得後放逐但未抽到的技能不擋保存；已取得才檢查等級，不等放逐成功。";goalActionHelp.style.display="block";goalActionSetting.append(goalAction,goalActionHelp);
   const noFlipSetting = document.createElement("label");
   noFlipSetting.textContent = "局內等級停止選技能卡（0＝關） ";
   const noFlipLevel = document.createElement("input");
@@ -11538,7 +11552,7 @@ const card = planChoice || (boltsOnly ? elementalChoice || preferred :
   firstDiscoveryChoice || elementalChoice || startingChoice || sameSkill || rankedDiscovery[0]?.card || preferred || attemptedCard ||
   (chest ? cards[Math.floor(Math.random() * cards.length)] : cards[0]));
 if (!card) {
-  status.textContent = skillPlan.enabled ? "技能等級計畫：牌面技能皆已達標，等待可用重抽／放逐" : arrowMode!=="off" ? "三元素箭：目前牌面沒有可選技能，且無可用重抽／放逐" : "原本優先順序：目前沒有可選技能，且無可用重抽／放逐";
+  status.textContent = skillPlan.enabled ? "技能目標尚未確認："+(skillPlan.pendingDetails?.join("、")||skillPlan.pending?.join("、")||"等待讀取技能等級") : arrowMode!=="off" ? "三元素箭：目前牌面沒有可選技能，且無可用重抽／放逐" : "原本優先順序：目前沒有可選技能，且無可用重抽／放逐";
   return;
 }
 const index = Number(card.dataset.i);
