@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 98.1
+// @version 98.2
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -4640,7 +4640,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V98.1 網頁控制特別版";
+  const versionName = "Gear V98.2 網頁控制特別版";
   let automationMode="normal";
   const raidCompletion={entered:false,finished:false};
   let raidExitAfterDone=false,raidChecklistAfter=0,raidChecklistAskedAt=0;
@@ -6000,22 +6000,24 @@ function raidGroupPanelAction(snapshot,preset,now) {
     const pending=goals.filter(goal=>(levels.get(normalizeSkill(goal.name)) ?? 0)<goal.target);
     return {enabled:true,done:pending.length===0,next:pending[0]?.name,pending:pending.map(goal=>goal.name),order:config.order||"rarity",reached:goals.filter(goal=>!pending.includes(goal)).map(goal=>goal.name)};
   }
+  let skillLevelProgress={signature:'',levels:new Map()};
+  function resetSkillLevelProgress(){skillLevelProgress={signature:'',levels:new Map()};}
   function readSkillLevelPlan() {
-    const config=skillLevelConfig();
-    if(!config.enabled)return {enabled:false,done:false};
-    const slots=[...document.querySelectorAll("#skillbar [data-skill], #lu-sockets [data-skill]")];
-    const tip=document.getElementById("skill-tip");
-    if(!slots.length || !tip)return {enabled:true,done:false};
-    const levels=new Map(),nodes=[...tip.childNodes],cls=tip.className,style=tip.getAttribute("style");
-    let unknown=false;
-    try { for(const slot of slots){
-      const level=Number(slot.querySelector(".lvl")?.textContent);
-      tip.classList.add("hidden");slot.dispatchEvent(new MouseEvent("mouseover",{bubbles:true}));
-      const name=tip.querySelector(".st-head b")?.textContent?.replace(/\s*\([^)]*\)\s*$/,"").trim();
-      if(!name || tip.classList.contains("hidden") || !Number.isSafeInteger(level) || level<1){unknown=true;continue;}
-      levels.set(normalizeSkill(name),level);
-    }} finally {tip.replaceChildren(...nodes);tip.className=cls;if(style===null)tip.removeAttribute("style");else tip.setAttribute("style",style);}
-    return evaluateSkillLevelPlan(config,skills(),unknown?null:levels);
+    const config=skillLevelConfig();if(!config.enabled)return {enabled:false,done:false};
+    const priorities=skills(),signature=JSON.stringify([config.names||priorities,config.targets||[]]);
+    if(skillLevelProgress.signature!==signature)skillLevelProgress={signature,levels:new Map()};
+    const slots=[...document.querySelectorAll('#skillbar [data-skill], #lu-sockets [data-skill]')],tip=document.getElementById('skill-tip');
+    const nodes=tip?[...tip.childNodes]:[],cls=tip?.className,style=tip?.getAttribute('style');
+    try{for(const slot of slots){
+      const level=Number(slot.querySelector('.lvl')?.textContent);if(!Number.isSafeInteger(level)||level<1)continue;
+      // Native skill IDs are stable even when a banished icon has no tooltip.
+      let name=jobSkillNames[slot.dataset.skill]?.[taiwanGame?0:1];
+      if(!name&&tip){tip.classList.add('hidden');slot.dispatchEvent(new MouseEvent('mouseover',{bubbles:true}));if(!tip.classList.contains('hidden'))name=tip.querySelector('.st-head b')?.textContent?.replace(/\s*\([^)]*\)\s*$/,'').trim();}
+      if(!name)continue;name=normalizeSkill(name);skillLevelProgress.levels.set(name,Math.max(level,skillLevelProgress.levels.get(name)||0));
+    }}finally{if(tip){tip.replaceChildren(...nodes);tip.className=cls;if(style===null)tip.removeAttribute('style');else tip.setAttribute('style',style);}}
+    // Missing unrelated icons never invalidate confirmed goals. An unobserved
+    // required skill still evaluates as zero and cannot count as achieved.
+    return evaluateSkillLevelPlan(config,priorities,skillLevelProgress.levels);
   }
   const banishSkills = () => readNames("ro-helper-banish-skills").map(normalizeSkill);
   const banishBasic = () => readSetting("ro-helper-banish-basic") === "on";
@@ -9775,6 +9777,7 @@ function createNativeGoalSelection() {
     let attemptedChestTab;
     let retrySavedChestAt = 0;
     function reset() {
+      if(typeof resetSkillLevelProgress==='function')resetSkillLevelProgress();
       nativeSelection.reset();
       stopped = false;
       chestCutoff = false;
