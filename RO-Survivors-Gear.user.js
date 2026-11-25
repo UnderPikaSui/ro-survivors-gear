@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 102.0
+// @version 102.1
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -4640,7 +4640,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V102.0 網頁控制特別版";
+  const versionName = "Gear V102.1 網頁控制特別版";
   let automationMode="normal";
   const raidCompletion={entered:false,finished:false};
   let raidExitAfterDone=false,raidChecklistAfter=0,raidChecklistAskedAt=0;
@@ -5085,6 +5085,13 @@ function raidGroupPanelAction(snapshot,preset,now) {
     automationMode='normal';resetRaidCompletion(raidCompletion);updateAssistantButton(true);rememberRefresh();
     status.textContent='可打副本全部完成，已離隊並切換單人普通掛機；下次請手動啟動副本';return true;
   }
+  function handleRaidCharacterSettlement(click){
+    const result=document.querySelector('#gameover:not(.hidden)'),button=result?.querySelector('#btn-restart');
+    if(!result||!button)return false;
+    const clicked=click(button);
+    status.textContent=clicked?'副本：已點擊回到角色，等待返回':'副本：等待回到角色結算按鈕';
+    return true;
+  }
   function handleRaidExpedition(){
     raidWaiting=false;raidWaitingText="";
     if(!taiwanGame)return false;
@@ -5097,6 +5104,7 @@ function raidGroupPanelAction(snapshot,preset,now) {
     if(!enabled)return false;
     const shown=el=>!!el && !el.hidden && !el.closest(".hidden") && el.style.display!=="none";
     const click=el=>{if(!shown(el)||el.disabled||now<raidNextAction)return false;raidNextAction=now+1200;el.click();return true;};
+    if(handleRaidCharacterSettlement(click))return true;
     if(raidExitAfterDone&&!active)return handleRaidFinishedExit(click,now);
     if(!active&&handleCardSwapMode('raid'))return true;
     if(active){
