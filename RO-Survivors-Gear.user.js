@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 99.1
+// @version 100.0
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -4640,7 +4640,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V99.1 網頁控制特別版";
+  const versionName = "Gear V100.0 網頁控制特別版";
   let automationMode="normal";
   const raidCompletion={entered:false,finished:false};
   let raidExitAfterDone=false,raidChecklistAfter=0,raidChecklistAskedAt=0;
@@ -5031,8 +5031,9 @@ function raidGroupPanelAction(snapshot,preset,now) {
   function handleRaidPostCleanup(){
     if(!raidCleanupPending||raidActive()||!document.body.classList.contains('in-lobby'))return false;
     if(document.getElementById('rg-count'))return false;
-    const settings=inventorySettings();
+    const settings=effectiveInventorySettings(inventorySettings());
     const targetCount=typeof targetStorageRules!=="undefined"?targetStorageRules.size:0;
+    if(settings.targetOnly&&!targetCount){raidCleanupPending=false;return false;}
     if((!settings.store&&!settings.sell&&!targetCount)||(!inventoryRules(settings).length&&!targetCount)){raidCleanupPending=false;return false;}
     if(inventoryRun?.raidCleanup&&inventoryRun.done){raidCleanupPending=false;return false;}
     if(!inventoryRun||inventoryRun.done){
@@ -8582,6 +8583,10 @@ function hansEventStagesForLap(lap) {
     try { return JSON.parse(localStorage.getItem(settingKey("ro-helper-inventory"))) || {}; }
     catch { return {}; }
   };
+  function effectiveInventorySettings(settings){
+    return settings.targetOnly===true?{...settings,requireFixed:false,store:true,sell:true}:settings;
+  }
+  function targetRuleNeedsRandomAffixes(rule){return !!rule&&[rule,...rule.alternatives||[]].some(r=>[...r.terms||[]].length>0);}
   const inventoryTierKey = "ro-helper-observed-gear-tiers";
   const observedGearTiers = new Set([1,2,3,4,5]);
   const validGearTier = tier => Number.isSafeInteger(tier) && tier > 0;
@@ -8708,6 +8713,7 @@ function hansEventStagesForLap(lap) {
   }
   const inventoryNeedsType=rule=>Boolean(rule.weapon || rule.exclude?.length);
   function inventoryRules(settings) {
+    if(settings.targetOnly===true)return [];
     const rules = Array.isArray(settings.rules) ? settings.rules : [{terms:settings.terms,page:0}];
     return rules.flatMap(rule => {
       if (!Array.isArray(rule?.terms) || !Number.isInteger(rule.page) || rule.page < 0 || rule.page > 6) return [];
@@ -8778,6 +8784,8 @@ function hansEventStagesForLap(lap) {
       parent.append(row);
       return input;
     };
+    const targetOnly=checkbox(form,'只依指定存倉篩選：符合存倉，不符合賣出',initial.targetOnly===true);
+    const targetOnlyHelp=document.createElement('small');targetOnlyHelp.textContent='勾選後停用下方一般存倉規則與固定詞條限制，直接依指定存倉的裝備、品質、Tier、隨機詞條判斷。符合但倉庫已滿仍留背包。';form.append(targetOnlyHelp);
     const requireFixed = checkbox(form, "沒有固定詞條的裝備不存", initial.requireFixed);
     const store = checkbox(form, "自動存倉（符合的裝備）", initial.store);
     const sell = checkbox(form, "自動賣裝（不符合的裝備）", initial.sell);
@@ -8801,7 +8809,7 @@ function hansEventStagesForLap(lap) {
     const list = document.createElement("div");
     list.style.cssText = "display:grid;gap:8px";
     const rows = [];
-    const savedRules = inventoryRules(initial);
+    const savedRules = inventoryRules({...initial,targetOnly:false});
     const tierOptions = document.createElement("datalist");
     tierOptions.id = "ro-helper-inventory-tiers";
     for (const element of document.querySelectorAll(".tip-item .muted, .dr-q, #charpanel [title], #ks-bag [title]")) {
@@ -8887,7 +8895,9 @@ function hansEventStagesForLap(lap) {
     add.onclick = () => addRule();
     const feedback = document.createElement("small");
     feedback.setAttribute("role","status");
-    form.append(list,add,"條件較多的規則優先，項數相同時使用上方規則。指定頁已滿或未解鎖就留在背包。",feedback);
+    const rulesHelp=document.createElement('small');rulesHelp.textContent='條件較多的規則優先，項數相同時使用上方規則。指定頁已滿或未解鎖就留在背包。';
+    form.append(list,add,rulesHelp,feedback);
+    const refreshTargetOnly=()=>{const only=targetOnly.checked;for(const input of [requireFixed,store,sell]){input.disabled=only;input.parentElement.style.opacity=only?'.5':'';}list.hidden=only;add.hidden=only;rulesHelp.hidden=only;targetOnlyHelp.hidden=!only;};targetOnly.onchange=refreshTargetOnly;refreshTargetOnly();
     form.style.maxHeight = "75dvh";
     form.style.overflowY = "auto";
     const save = document.createElement("button");
@@ -8903,15 +8913,16 @@ function hansEventStagesForLap(lap) {
       const rules = rows.map(({destination,tierField,qualityField,weaponField,fields,readExcluded}) => ({
         page:Number(destination.value),tier:tierField.valueAsNumber,quality:Number(qualityField.value),weapon:weaponField.value,exclude:readExcluded(),terms:fields.filter(([,input]) => input.checked).map(([term]) => term)
       }));
-      if (rules.some(rule=>rule.tier !== 0 && !validGearTier(rule.tier))) {
+      if (!targetOnly.checked&&rules.some(rule=>rule.tier !== 0 && !validGearTier(rule.tier))) {
         feedback.textContent = "裝備 Tier 請輸入非負整數";
         return;
       }
-      if ((store.checked || sell.checked) && (!rules.length || rules.some(rule => !rule.terms.length && !rule.tier && !rule.quality))) {
+      if (!targetOnly.checked&&(store.checked || sell.checked) && (!rules.length || rules.some(rule => !rule.terms.length && !rule.tier && !rule.quality))) {
         feedback.textContent = "每條規則至少設定一個詞條、Tier 或品質，或刪除空白規則";
         return;
       }
-      writeSetting("ro-helper-inventory", JSON.stringify({requireFixed:requireFixed.checked,store:store.checked,sell:sell.checked,rules,soloReserve:soloReserve.valueAsNumber,partyReserve:partyReserve.valueAsNumber}));
+      if(targetOnly.checked&&!targetStorageRules.size){feedback.textContent='請先啟用指定存倉，並至少設定一件裝備';return;}
+      writeSetting("ro-helper-inventory", JSON.stringify({targetOnly:targetOnly.checked,requireFixed:requireFixed.checked,store:store.checked,sell:sell.checked,rules,soloReserve:soloReserve.valueAsNumber,partyReserve:partyReserve.valueAsNumber}));
       inventoryRun = undefined;
       dialog.close();
       status.textContent = "已儲存裝備整理設定";
@@ -9153,9 +9164,10 @@ function hansEventStagesForLap(lap) {
       inventoryRun = undefined;
       return false;
     }
-    const settings = inventorySettings();
+    const settings = effectiveInventorySettings(inventorySettings());
     const rules = inventoryRules(settings);
     const manual = inventoryRun?.manual === true;
+    if(settings.targetOnly&&!targetStorageRules.size){inventoryRun=undefined;if(manual)status.textContent='請先啟用指定存倉並設定裝備，尚未出售任何物品';return false;}
     if ((!manual && !settings.store && !settings.sell && !targetStorageRules.size) || (!rules.length && !targetStorageRules.size)) return false;
     const find = selector => document.querySelector(selector);
     const reserve = find(".pf-leave[data-leave]") || previewDifficultyMode() === "party"
@@ -9192,6 +9204,11 @@ function hansEventStagesForLap(lap) {
       }
       return true;
     };
+    if(settings.targetOnly){
+      const stamp=readSetting('ro-helper-target-storage');
+      if(run.targetStamp===undefined)run.targetStamp=stamp;
+      else if(run.targetStamp!==stamp){run.targetStamp=stamp;run.reject.clear();return finish('指定存倉設定已改變，已停止本次賣裝並重新檢查');}
+    }
     if (Date.now() < run.next) return true;
     if (["check","recheck"].includes(run.phase)) {
       if (find(".overlay:not(.hidden)")) return true;
@@ -9279,8 +9296,9 @@ function hansEventStagesForLap(lap) {
         if(forcedTarget?.action==="sell"&&!forcedTarget.ambiguous){
           close.click();if(!hasCard)run.reject.add(uid);continue;
         }
-        const bonuses = inventoryRandomAffixLines(uid);
-        if(bonuses===null){close.click();continue;}
+        const readBonuses=inventoryRandomAffixLines(uid);
+        if(readBonuses===null&&(!settings.targetOnly||targetRuleNeedsRandomAffixes(forcedTarget))){close.click();continue;}
+        const bonuses=readBonuses||[];
         const tierText = tip.querySelector(".tip-item .muted")?.textContent.normalize("NFKC") || "";
         const tier = readInventoryTier(tierText);
         const grade = [...cell.classList].map(name => name.match(/^q(\d+)$/)?.[1]).find(Boolean);
@@ -11986,6 +12004,7 @@ void connectCoordinates(false);
       status.textContent = "回廣場後才能整理背包";
       return;
     }
+    if(inventorySettings().targetOnly&&!targetStorageRules.size){status.textContent='請先啟用指定存倉並設定裝備';return;}
     if (!targetStorageRules.size && !inventoryRules(inventorySettings()).length) {
       status.textContent = "請先設定裝備整理或指定存倉規則";
       return;
