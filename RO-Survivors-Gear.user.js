@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 101.1
+// @version 101.2
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -4640,7 +4640,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V101.1 網頁控制特別版";
+  const versionName = "Gear V101.2 網頁控制特別版";
   let automationMode="normal";
   const raidCompletion={entered:false,finished:false};
   let raidExitAfterDone=false,raidChecklistAfter=0,raidChecklistAskedAt=0;
@@ -6017,7 +6017,7 @@ function raidGroupPanelAction(snapshot,preset,now) {
     const decreased=[...observedIds].some(([id,n])=>n<(skillLevelProgress.idLevels?.get(id)||0));
     const restarted=fresh&&Number.isFinite(live.battleSeconds)&&Number.isFinite(skillLevelProgress.seconds)&&live.battleSeconds+1<skillLevelProgress.seconds;
     const changedStage=fresh&&live.stageId&&skillLevelProgress.stage&&live.stageId!==skillLevelProgress.stage;
-    if(decreased||restarted||changedStage)skillLevelProgress.levels.clear();
+    if(decreased||restarted||changedStage){skillLevelProgress.levels.clear();skillLevelProgress.banished=new Set();}
     if(observedIds.size)skillLevelProgress.idLevels=observedIds;
     if(fresh){skillLevelProgress.stage=live.stageId;skillLevelProgress.seconds=live.battleSeconds;}
     const nodes=tip?[...tip.childNodes]:[],cls=tip?.className,style=tip?.getAttribute('style');
@@ -6027,7 +6027,7 @@ function raidGroupPanelAction(snapshot,preset,now) {
       let actual='';
       if(tip){tip.classList.add('hidden');slot.dispatchEvent(new MouseEvent('mouseover',{bubbles:true}));if(!tip.classList.contains('hidden'))actual=tip.querySelector('.st-head b')?.textContent?.replace(/\s*\([^)]*\)\s*$/,'').trim()||'';}
       // Use the game's live name first; retain known ID aliases only as corroboration.
-      if(actual)remember(actual,level);
+      if(actual){remember(actual,level);(skillLevelProgress.idNames??=new Map()).set(slot.dataset.skill,normalizeSkill(actual));}
       const aliases=jobSkillNames[slot.dataset.skill];if(aliases)for(const alias of aliases)remember(alias,level);
     }}finally{if(tip){tip.replaceChildren(...nodes);tip.className=cls;if(style===null)tip.removeAttribute('style');else tip.setAttribute('style',style);}}
     // Missing unrelated icons never invalidate confirmed goals. An unobserved
@@ -6045,9 +6045,19 @@ function raidGroupPanelAction(snapshot,preset,now) {
     const ownedNonBasic=new Set(slots.filter(slot=>!slot.classList?.contains('basic')).map(slot=>slot.dataset.skill).filter(Boolean));
     result.randomSlots=config.order==='acquireFirst'&&configured.size?Math.max(0,6-configured.size):0;
     result.canRandomFill=result.randomSlots>0&&!result.acquisitionPending?.length&&ownedNonBasic.size<6;
-    // Blank filler slots are optional and never block configured target saving.
+    const confirmed=skillLevelProgress.banished||new Set();
+    const ownedNames=new Set([...skillLevelProgress.levels.keys()]);
+    const fillerNames=[...ownedNonBasic].flatMap(id=>skillLevelProgress.idNames?.has(id)?[skillLevelProgress.idNames.get(id)]:jobSkillNames[id]||[]).map(normalizeSkill).filter(name=>!configured.has(name)&&!isBasicAttack(name));
+    const required=[...(config.banishNames||[]).map(normalizeSkill).filter(name=>ownedNames.has(name)),...fillerNames];
+    result.banishPending=[...new Set(required)].filter(name=>!confirmed.has(name));
+    if(result.randomSlots>0&&ownedNonBasic.size<6||result.banishPending.length)result.done=false;
     result.pendingDetails=(result.pending||[]).map(name=>{const index=(config.names||priorities).findIndex(n=>skillMatches(n,name)),level=skillLevelProgress.levels.get(normalizeSkill(name));return name+'（'+(level??'未讀到')+'/'+Number(config.targets?.[index])+'）';});
     return result;
+  }
+  function recordConfirmedSkillBanish(name,oldCard){
+    // Native banish synchronously replaces/removes the offer; a click alone is not confirmation.
+    if(!oldCard||oldCard.isConnected!==false)return false;
+    (skillLevelProgress.banished??=new Set()).add(normalizeSkill(name));return true;
   }
   function choosePlannedSkillCard(cards,plan){
     if(!plan.enabled)return null;
@@ -11543,7 +11553,9 @@ const treasureName = card => treasureCardName(card,card.querySelector(".pk-name"
     usedBanish.add(banish.button);
     status.textContent = "已按放逐：" + banish.name;
     nextMenuAt = Date.now() + 320;
+    const banishedCard=banish.button.closest(".pk-slot")?.querySelector(".pk-card");
     banish.button.click();
+    recordConfirmedSkillBanish(banish.name,banishedCard);
     return;
   }
 }
@@ -11615,9 +11627,9 @@ if(skillPlan.enabled&&skillPlan.order==='acquireFirst'&&!planChoice){
   const rerollLeft=availableReroll(picker,visible,usedRerolls,false);
   if(!rerollLeft){
     const fallback=findUnwantedSkillBanish(picker,skillLevelConfig().names||skills(),visible,usedBanish,banishBasic(),focusSkill());
-    if(fallback){usedBanish.add(fallback.button);status.textContent='沒有可用重抽，放逐未指定技能：'+fallback.name;nextMenuAt=Date.now()+320;fallback.button.click();return;}
+    if(fallback){usedBanish.add(fallback.button);status.textContent='沒有可用重抽，放逐未指定技能：'+fallback.name;nextMenuAt=Date.now()+320;const banishedCard=fallback.button.closest('.pk-slot')?.querySelector('.pk-card');fallback.button.click();recordConfirmedSkillBanish(fallback.name,banishedCard);return;}
   }
-  status.textContent='先各取得1級：沒有指定新技能或未達標技能，'+(rerollLeft?'請開啟自動重抽或手動處理':'無可用重抽或可安全放逐的技能，請手動處理')+(skillPlan.acquisitionPending?.length?'｜待取得：'+skillPlan.acquisitionPending.join('、'):'')+'｜尚未確認：'+([...(skillPlan.acquisitionPending||[]),...(skillPlan.pendingDetails||[])].join('、')||'無')+'｜目前已存技能：'+(skillPlan.configuredNames||skills()).join('、');return;
+  status.textContent='先各取得1級：沒有指定新技能或未達標技能，'+(rerollLeft?'請開啟自動重抽或手動處理':'無可用重抽或可安全放逐的技能，請手動處理')+(skillPlan.acquisitionPending?.length?'｜待取得：'+skillPlan.acquisitionPending.join('、'):'')+'｜尚未確認：'+([...(skillPlan.acquisitionPending||[]),...(skillPlan.pendingDetails||[]),...(skillPlan.banishPending||[]).map(name=>name+'（待放逐）')].join('、')||'無')+'｜目前已存技能：'+(skillPlan.configuredNames||skills()).join('、');return;
 }
 const card = planChoice || (boltsOnly ? elementalChoice || preferred :
   firstDiscoveryChoice || elementalChoice || startingChoice || sameSkill || rankedDiscovery[0]?.card || preferred || attemptedCard ||
