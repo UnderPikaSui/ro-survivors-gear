@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 101.0
+// @version 101.1
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -4640,7 +4640,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V101.0 網頁控制特別版";
+  const versionName = "Gear V101.1 網頁控制特別版";
   let automationMode="normal";
   const raidCompletion={entered:false,finished:false};
   let raidExitAfterDone=false,raidChecklistAfter=0,raidChecklistAskedAt=0;
@@ -6045,7 +6045,7 @@ function raidGroupPanelAction(snapshot,preset,now) {
     const ownedNonBasic=new Set(slots.filter(slot=>!slot.classList?.contains('basic')).map(slot=>slot.dataset.skill).filter(Boolean));
     result.randomSlots=config.order==='acquireFirst'&&configured.size?Math.max(0,6-configured.size):0;
     result.canRandomFill=result.randomSlots>0&&!result.acquisitionPending?.length&&ownedNonBasic.size<6;
-    if(result.randomSlots>0&&ownedNonBasic.size<6)result.done=false;
+    // Blank filler slots are optional and never block configured target saving.
     result.pendingDetails=(result.pending||[]).map(name=>{const index=(config.names||priorities).findIndex(n=>skillMatches(n,name)),level=skillLevelProgress.levels.get(normalizeSkill(name));return name+'（'+(level??'未讀到')+'/'+Number(config.targets?.[index])+'）';});
     return result;
   }
@@ -6757,6 +6757,8 @@ function hansEventStagesForLap(lap) {
       };
       candidates.sort((a,b) => rank(a) - rank(b));
     }
+    // Skill single-card rerolls preserve skill identity; only deck rerolls can find a missing skill.
+    if(!chest)return null;
     const button = candidates[0];
     return button ? { button, action: "重抽單張" } : null;
   }
@@ -11615,7 +11617,7 @@ if(skillPlan.enabled&&skillPlan.order==='acquireFirst'&&!planChoice){
     const fallback=findUnwantedSkillBanish(picker,skillLevelConfig().names||skills(),visible,usedBanish,banishBasic(),focusSkill());
     if(fallback){usedBanish.add(fallback.button);status.textContent='沒有可用重抽，放逐未指定技能：'+fallback.name;nextMenuAt=Date.now()+320;fallback.button.click();return;}
   }
-  status.textContent='先各取得1級：沒有指定新技能或未達標技能，'+(rerollLeft?'請開啟自動重抽或手動處理':'無可用重抽或可安全放逐的技能，請手動處理')+(skillPlan.acquisitionPending?.length?'｜待取得：'+skillPlan.acquisitionPending.join('、'):'')+'｜目前已存技能：'+(skillPlan.configuredNames||skills()).join('、');return;
+  status.textContent='先各取得1級：沒有指定新技能或未達標技能，'+(rerollLeft?'請開啟自動重抽或手動處理':'無可用重抽或可安全放逐的技能，請手動處理')+(skillPlan.acquisitionPending?.length?'｜待取得：'+skillPlan.acquisitionPending.join('、'):'')+'｜尚未確認：'+([...(skillPlan.acquisitionPending||[]),...(skillPlan.pendingDetails||[])].join('、')||'無')+'｜目前已存技能：'+(skillPlan.configuredNames||skills()).join('、');return;
 }
 const card = planChoice || (boltsOnly ? elementalChoice || preferred :
   firstDiscoveryChoice || elementalChoice || startingChoice || sameSkill || rankedDiscovery[0]?.card || preferred || attemptedCard ||
