@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 101.3
+// @version 102.0
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -4640,7 +4640,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V101.3 網頁控制特別版";
+  const versionName = "Gear V102.0 網頁控制特別版";
   let automationMode="normal";
   const raidCompletion={entered:false,finished:false};
   let raidExitAfterDone=false,raidChecklistAfter=0,raidChecklistAskedAt=0;
@@ -6058,6 +6058,13 @@ function raidGroupPanelAction(snapshot,preset,now) {
     // Native banish synchronously replaces/removes the offer; a click alone is not confirmation.
     if(!oldCard||oldCard.isConnected!==false)return false;
     (skillLevelProgress.banished??=new Set()).add(normalizeSkill(name));return true;
+  }
+  function chooseBanishProgressCard(cards,plan,canReroll){
+    if(!plan.enabled||plan.done||!plan.banishPending?.length||plan.pending?.length||plan.acquisitionPending?.length||canReroll)return null;
+    // Only confirmed acquired target upgrades may exceed their limits to expose the remaining banishes.
+    const candidates=cards.filter(card=>!card.querySelector('.pk-ribbon')&&!isBasicAttack(skillCardName(card))&&(plan.reached||[]).some(name=>skillMatches(name,skillCardName(card))));
+    const pending=name=>(plan.banishPending||[]).some(goal=>skillMatches(goal,name));
+    return candidates.sort((a,b)=>Number(pending(skillCardName(a)))-Number(pending(skillCardName(b)))||cardRarity(b)-cardRarity(a))[0]||null;
   }
   function choosePlannedSkillCard(cards,plan){
     if(!plan.enabled)return null;
@@ -11539,6 +11546,7 @@ if (cards[0] !== pickerFirstCard) {
 }
 if (!cards.length || Date.now() < Math.max(pickerReadyAt, nextMenuAt)) return;
 const offeredCardCount=cards.length;
+const offeredSkillCards=cards.slice();
 const skillPlan=chest?{enabled:false}:readSkillLevelPlan();
 if(skillPlan.enabled && skillPlan.reached?.length)cards=cards.filter(card=>card.querySelector('.pk-ribbon')||!skillPlan.reached.some(name=>skillMatches(name,skillCardName(card))));
 const planChoice=choosePlannedSkillCard(cards,skillPlan);
@@ -11624,7 +11632,8 @@ if ((discoveryModeForTreasure ? !firstDiscoveryChoice && rankedDiscovery.length 
     return;
   }
 }
-if(skillPlan.enabled&&skillPlan.order==='acquireFirst'&&!planChoice){
+const banishProgressChoice=!chest&&!planChoice?chooseBanishProgressCard(offeredSkillCards,skillPlan,Boolean(availableReroll(picker,visible,usedRerolls,false))):null;
+if(skillPlan.enabled&&skillPlan.order==='acquireFirst'&&!planChoice&&!banishProgressChoice){
   const picker=document.querySelector('#picker:not(.hidden):not(.closing)');
   const rerollLeft=availableReroll(picker,visible,usedRerolls,false);
   if(!rerollLeft){
@@ -11633,11 +11642,11 @@ if(skillPlan.enabled&&skillPlan.order==='acquireFirst'&&!planChoice){
   }
   status.textContent='先各取得1級：沒有指定新技能或未達標技能，'+(rerollLeft?'請開啟自動重抽或手動處理':'無可用重抽或可安全放逐的技能，請手動處理')+(skillPlan.acquisitionPending?.length?'｜待取得：'+skillPlan.acquisitionPending.join('、'):'')+'｜尚未確認：'+([...(skillPlan.acquisitionPending||[]),...(skillPlan.pendingDetails||[]),...(skillPlan.banishPending||[]).map(name=>name+'（待放逐）')].join('、')||'無')+'｜目前已存技能：'+(skillPlan.configuredNames||skills()).join('、');return;
 }
-const card = planChoice || (boltsOnly ? elementalChoice || preferred :
+const card = planChoice || banishProgressChoice || (boltsOnly ? elementalChoice || preferred :
   firstDiscoveryChoice || elementalChoice || startingChoice || sameSkill || rankedDiscovery[0]?.card || preferred || attemptedCard ||
   (chest ? cards[Math.floor(Math.random() * cards.length)] : cards[0]));
 if (!card) {
-  status.textContent = skillPlan.enabled ? "技能目標尚未確認："+(skillPlan.pendingDetails?.join("、")||skillPlan.pending?.join("、")||"等待讀取技能等級") : arrowMode!=="off" ? "三元素箭：目前牌面沒有可選技能，且無可用重抽／放逐" : "原本優先順序：目前沒有可選技能，且無可用重抽／放逐";
+  status.textContent = skillPlan.enabled ? (skillPlan.banishPending?.length?"技能等級已達標，等待放逐："+skillPlan.banishPending.join("、"):"技能目標尚未確認："+(skillPlan.pendingDetails?.join("、")||skillPlan.pending?.join("、")||"等待讀取技能等級")) : arrowMode!=="off" ? "三元素箭：目前牌面沒有可選技能，且無可用重抽／放逐" : "原本優先順序：目前沒有可選技能，且無可用重抽／放逐";
   return;
 }
 const index = Number(card.dataset.i);
@@ -11647,7 +11656,7 @@ if (attemptedCard !== card) {
   attemptedCard = card;
   attempts = 0;
 }
-status.textContent = categoryModeForTreasure ? "選寶物："+(treasureCategories.find(([key])=>key===treasureCategory(card))?.[1] || "其他")+" · "+treasureName(card) : (chest ? "選寶箱：" : "選技能：") + number;
+status.textContent = banishProgressChoice ? "等待放逐："+skillPlan.banishPending.join("、")+"；暫時超過目標升級「"+skillCardName(card)+"」以繼續選卡" : categoryModeForTreasure ? "選寶物："+(treasureCategories.find(([key])=>key===treasureCategory(card))?.[1] || "其他")+" · "+treasureName(card) : (chest ? "選寶箱：" : "選技能：") + number;
 if (attempts % 2 === 0) {
   card.click();
 } else {
