@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 99.0
+// @version 99.1
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -4640,7 +4640,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V99.0 網頁控制特別版";
+  const versionName = "Gear V99.1 網頁控制特別版";
   let automationMode="normal";
   const raidCompletion={entered:false,finished:false};
   let raidExitAfterDone=false,raidChecklistAfter=0,raidChecklistAskedAt=0;
@@ -6707,6 +6707,16 @@ function hansEventStagesForLap(lap) {
       basicAction ??= { button, name };
     }
     return basicAction;
+  }
+  function findUnwantedSkillBanish(picker,protectedNames,visible,used,allowBasic=false,protectedFocus=''){
+    const candidates=[];
+    for(const slot of picker?.querySelectorAll('#pk-cards .pk-slot')||[]){
+      const card=slot.querySelector('.pk-card'),name=card?skillCardName(card):'';
+      if(!name||protectedNames.some(goal=>skillMatches(goal,name))||protectedFocus&&skillMatches(protectedFocus,name)||isBasicAttack(name)&&!allowBasic)continue;
+      const button=[...slot.querySelectorAll('.pk-acts button.pk-act')].find(b=>/^(?:放逐|Banish)(?:\s*\d+)?$/i.test(b.textContent.trim())&&visible(b)&&!used.has(b));
+      if(button)candidates.push({button,name,rarity:cardRarity(card)});
+    }
+    return candidates.sort((a,b)=>a.rarity-b.rarity)[0]||null;
   }
   function availableReroll(picker, visible, used, chest = false) {
     const ready = button => visible(button) && !used.has(button);
@@ -11561,7 +11571,13 @@ if ((discoveryModeForTreasure ? !firstDiscoveryChoice && rankedDiscovery.length 
   }
 }
 if(skillPlan.enabled&&skillPlan.order==='acquireFirst'&&!planChoice){
-  status.textContent='先各取得1級：沒有指定新技能或未達標技能，'+(autoReroll?'目前無可用重抽，請手動處理':'請開啟自動重抽或手動處理')+(skillPlan.acquisitionPending?.length?'｜待取得：'+skillPlan.acquisitionPending.join('、'):'');return;
+  const picker=document.querySelector('#picker:not(.hidden):not(.closing)');
+  const rerollLeft=availableReroll(picker,visible,usedRerolls,false);
+  if(!rerollLeft){
+    const fallback=findUnwantedSkillBanish(picker,skillLevelConfig().names||skills(),visible,usedBanish,banishBasic(),focusSkill());
+    if(fallback){usedBanish.add(fallback.button);status.textContent='沒有可用重抽，放逐未指定技能：'+fallback.name;nextMenuAt=Date.now()+320;fallback.button.click();return;}
+  }
+  status.textContent='先各取得1級：沒有指定新技能或未達標技能，'+(rerollLeft?'請開啟自動重抽或手動處理':'無可用重抽或可安全放逐的技能，請手動處理')+(skillPlan.acquisitionPending?.length?'｜待取得：'+skillPlan.acquisitionPending.join('、'):'');return;
 }
 const card = planChoice || (boltsOnly ? elementalChoice || preferred :
   firstDiscoveryChoice || elementalChoice || startingChoice || sameSkill || rankedDiscovery[0]?.card || preferred || attemptedCard ||
