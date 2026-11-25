@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 100.0
+// @version 100.1
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -4640,7 +4640,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V100.0 網頁控制特別版";
+  const versionName = "Gear V100.1 網頁控制特別版";
   let automationMode="normal";
   const raidCompletion={entered:false,finished:false};
   let raidExitAfterDone=false,raidChecklistAfter=0,raidChecklistAskedAt=0;
@@ -6002,7 +6002,7 @@ function raidGroupPanelAction(snapshot,preset,now) {
     const relevant=goals.filter(g=>!optional.has(normalizeSkill(g.name))||level(g)>0);
     const pending=relevant.filter(g=>level(g)<g.target);
     const acquisitionPending=config.order==='acquireFirst'?(config.names||priorities).filter(name=>name&&!(levels.get(normalizeSkill(name))>0)):[];
-    return {enabled:true,done:relevant.length>0&&pending.length===0&&acquisitionPending.length===0,next:pending[0]?.name,pending:pending.map(g=>g.name),acquisitionPending,unlimited:(config.names||priorities).filter((name,index)=>name&&!(Number(config.targets?.[index])>0)),order:config.order||'rarity',reached:goals.filter(g=>level(g)>=g.target).map(g=>g.name),ignored:goals.filter(g=>optional.has(normalizeSkill(g.name))&&level(g)===0).map(g=>g.name)};
+    return {enabled:true,done:relevant.length>0&&pending.length===0&&acquisitionPending.length===0,next:pending[0]?.name,pending:pending.map(g=>g.name),configuredNames:(config.names||priorities).filter(Boolean),acquisitionPending,unlimited:(config.names||priorities).filter((name,index)=>name&&!(Number(config.targets?.[index])>0)),order:config.order||'rarity',reached:goals.filter(g=>level(g)>=g.target).map(g=>g.name),ignored:goals.filter(g=>optional.has(normalizeSkill(g.name))&&level(g)===0).map(g=>g.name)};
   }
   let skillLevelProgress={signature:'',levels:new Map()};
   function resetSkillLevelProgress(){skillLevelProgress={signature:'',levels:new Map()};}
@@ -6011,6 +6011,15 @@ function raidGroupPanelAction(snapshot,preset,now) {
     const priorities=skills(),signature=JSON.stringify([config.names||priorities,config.targets||[]]);
     if(skillLevelProgress.signature!==signature)skillLevelProgress={signature,levels:new Map()};
     const slots=[...document.querySelectorAll('#skillbar [data-skill], #lu-sockets [data-skill]')],tip=document.getElementById('skill-tip');
+    const observedIds=new Map();
+    for(const slot of slots){const id=slot.dataset.skill,n=Number(slot.querySelector('.lvl')?.textContent);if(id&&Number.isSafeInteger(n)&&n>0)observedIds.set(id,Math.max(n,observedIds.get(id)||0));}
+    const live=typeof readLivePacket==='function'?readLivePacket():null,fresh=live&&Number.isFinite(live.at)&&Math.abs(Date.now()-live.at)<1500;
+    const decreased=[...observedIds].some(([id,n])=>n<(skillLevelProgress.idLevels?.get(id)||0));
+    const restarted=fresh&&Number.isFinite(live.battleSeconds)&&Number.isFinite(skillLevelProgress.seconds)&&live.battleSeconds+1<skillLevelProgress.seconds;
+    const changedStage=fresh&&live.stageId&&skillLevelProgress.stage&&live.stageId!==skillLevelProgress.stage;
+    if(decreased||restarted||changedStage)skillLevelProgress.levels.clear();
+    if(observedIds.size)skillLevelProgress.idLevels=observedIds;
+    if(fresh){skillLevelProgress.stage=live.stageId;skillLevelProgress.seconds=live.battleSeconds;}
     const nodes=tip?[...tip.childNodes]:[],cls=tip?.className,style=tip?.getAttribute('style');
     const remember=(name,level)=>{if(!name||!Number.isSafeInteger(level)||level<1)return;name=normalizeSkill(name);skillLevelProgress.levels.set(name,Math.max(level,skillLevelProgress.levels.get(name)||0));};
     try{for(const slot of slots){
@@ -6026,8 +6035,9 @@ function raidGroupPanelAction(snapshot,preset,now) {
     // An upgrade offer exposes the current level (left of the arrow), even if a
     // hidden or banished HUD icon cannot produce a tooltip. Fresh offers count zero.
     for(const card of document.querySelectorAll('#picker:not(.hidden):not(.closing) #pk-cards .pk-card')){
-      if(card.querySelector('.pk-ribbon'))continue;
-      const name=card.querySelector('.pk-name')?.textContent.trim(),sub=card.querySelector('.pk-sub')?.textContent.normalize('NFKC').trim()||'';
+      const offeredName=card.querySelector('.pk-name')?.textContent.trim();
+      if(card.querySelector('.pk-ribbon')){if(offeredName)skillLevelProgress.levels.delete(normalizeSkill(offeredName));continue;}
+      const name=offeredName,sub=card.querySelector('.pk-sub')?.textContent.normalize('NFKC').trim()||'';
       const level=Number(sub.match(/^(?:Lv\.?|Nv\.?|Level|等級)\s*(\d+)\s*(?:→|->)/i)?.[1]);remember(name,level);
     }
     const result=evaluateSkillLevelPlan(config,priorities,skillLevelProgress.levels);
@@ -6038,7 +6048,7 @@ function raidGroupPanelAction(snapshot,preset,now) {
     if(!plan.enabled)return null;
     const ranked=(pool,names)=>pool.sort((a,b)=>cardRarity(b)-cardRarity(a)||names.findIndex(n=>skillMatches(n,skillCardName(a)))-names.findIndex(n=>skillMatches(n,skillCardName(b))))[0]||null;
     if(plan.order==='acquireFirst'){
-      const missing=plan.acquisitionPending||[];
+      const missing=plan.configuredNames||plan.acquisitionPending||[];
       const fresh=cards.filter(card=>card.querySelector('.pk-ribbon')&&missing.some(name=>skillMatches(name,skillCardName(card))));
       if(fresh.length)return ranked(fresh,missing);
       const pending=plan.pending||[],upgrade=ranked(cards.filter(card=>pending.some(name=>skillMatches(name,skillCardName(card)))),pending);if(upgrade)return upgrade;const unlimited=plan.unlimited||[];return ranked(cards.filter(card=>unlimited.some(name=>skillMatches(name,skillCardName(card)))),unlimited);
@@ -11506,7 +11516,7 @@ if (cards[0] !== pickerFirstCard) {
 if (!cards.length || Date.now() < Math.max(pickerReadyAt, nextMenuAt)) return;
 const offeredCardCount=cards.length;
 const skillPlan=chest?{enabled:false}:readSkillLevelPlan();
-if(skillPlan.enabled && skillPlan.reached?.length)cards=cards.filter(card=>!skillPlan.reached.some(name=>skillMatches(name,skillCardName(card))));
+if(skillPlan.enabled && skillPlan.reached?.length)cards=cards.filter(card=>card.querySelector('.pk-ribbon')||!skillPlan.reached.some(name=>skillMatches(name,skillCardName(card))));
 const planChoice=choosePlannedSkillCard(cards,skillPlan);
 const arrowMode = chest || skillPlan.enabled ? "off" : arrowSetting("mode");
 const boltsOnly = arrowMode === "boltsOnly";
@@ -11595,7 +11605,7 @@ if(skillPlan.enabled&&skillPlan.order==='acquireFirst'&&!planChoice){
     const fallback=findUnwantedSkillBanish(picker,skillLevelConfig().names||skills(),visible,usedBanish,banishBasic(),focusSkill());
     if(fallback){usedBanish.add(fallback.button);status.textContent='沒有可用重抽，放逐未指定技能：'+fallback.name;nextMenuAt=Date.now()+320;fallback.button.click();return;}
   }
-  status.textContent='先各取得1級：沒有指定新技能或未達標技能，'+(rerollLeft?'請開啟自動重抽或手動處理':'無可用重抽或可安全放逐的技能，請手動處理')+(skillPlan.acquisitionPending?.length?'｜待取得：'+skillPlan.acquisitionPending.join('、'):'');return;
+  status.textContent='先各取得1級：沒有指定新技能或未達標技能，'+(rerollLeft?'請開啟自動重抽或手動處理':'無可用重抽或可安全放逐的技能，請手動處理')+(skillPlan.acquisitionPending?.length?'｜待取得：'+skillPlan.acquisitionPending.join('、'):'')+'｜目前已存技能：'+(skillPlan.configuredNames||skills()).join('、');return;
 }
 const card = planChoice || (boltsOnly ? elementalChoice || preferred :
   firstDiscoveryChoice || elementalChoice || startingChoice || sameSkill || rankedDiscovery[0]?.card || preferred || attemptedCard ||
