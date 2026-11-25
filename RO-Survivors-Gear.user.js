@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 101.2
+// @version 101.3
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -4640,7 +4640,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V101.2 網頁控制特別版";
+  const versionName = "Gear V101.3 網頁控制特別版";
   let automationMode="normal";
   const raidCompletion={entered:false,finished:false};
   let raidExitAfterDone=false,raidChecklistAfter=0,raidChecklistAskedAt=0;
@@ -10757,22 +10757,24 @@ function chooseRaidMechanicRoute(packet,now=Date.now(),blockedDirections=[]) {
   sessionNotesRefresh.onclick=()=>refreshSessionNotes();sessionNotesClose.onclick=()=>sessionNotesWindow.hidden=true;
   sessionNotesFooter.append(sessionNotesRefresh,sessionNotesClose);sessionNotesWindow.append(sessionNotesBody,sessionNotesFooter);document.body.append(sessionNotesWindow);
   function refreshSessionNotes() {
-    const data=buildSessionNotes(collectLootRows(1),collectLootRows(0),runStatistics.snapshot(),intruderNotes.snapshot(),runStatistics.current());
+    const data=buildSessionNotes(collectLootRows(1,true),collectLootRows(0),runStatistics.snapshot(),intruderNotes.snapshot(),runStatistics.current());
     const count=rows=>rows.reduce((sum,[,n])=>sum+n,0),lines=["本次掛機記事","已結束 "+data.finished+" 場（通關 "+data.completed+"／中途退出或失敗 "+data.incomplete+"）；進行中 "+data.active+" 場"];
     const section=(title,rows)=>{lines.push("",title+"："+count(rows));for(const [name,n]of rows)lines.push("• "+name+" ×"+n);if(!rows.length)lines.push("尚無紀錄");};
-    section("王卡（張）",data.boss);section("MINI 卡（張）",data.mini);
+    section("王卡（遊戲確認取得，張）",data.boss);section("MINI 卡（遊戲確認取得，張）",data.mini);
     lines.push("","遇到亂入王："+data.intruderTotal+" 次");
     for(const row of data.intruders){const entry=stageBosses.flatMap(([,bosses])=>bosses).find(boss=>boss[0]===row.id);lines.push("• "+(entry?.[1]||row.id)+" ×"+row.count);}
     section("符合指定存倉的裝備（件，依目前規則）",data.specified);
-    lines.push("","統計本次助手啟動後記錄到的掉落；只計已取得物品。按更新或重新開啟時讀取最新資料。");
+    lines.push("","卡片只計本次助手啟動後，遊戲本局取得紀錄確認的項目；不採計展示畫面、擲骰公告或結算畫面補記。這是累計取得數，不是目前卡片庫存數；已回收或裝備使用仍保留紀錄。按更新或重新開啟讀取最新資料。");
     sessionNotesBody.textContent=lines.join("\n");
   }
 
 
-  function collectLootRows(category) {
+  function collectLootRows(category,confirmedOnly=false) {
     const runs = new Set([...lootHistory.keys(), ...revealedLoot.keys(), ...settledLoot.keys()]);
     const rows = [...runs].flatMap(run => {
       const sampled = lootHistory.get(run)?.[category] || [];
+      // Notes count native runCards acquisition only, never presentation or settlement fallbacks.
+      if(confirmedOnly)return sampled;
       const revealed = revealedLoot.get(run)?.[category] || [];
       const settled = settledLoot.get(run)?.groups[category] || [];
       if (settled.length > sampled.length && settled.length >= revealed.length) return settled;
