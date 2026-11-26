@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 103.2
+// @version 103.3
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -4640,7 +4640,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V103.2 網頁控制特別版";
+  const versionName = "Gear V103.3 網頁控制特別版";
   let automationMode="normal";
   const raidCompletion={entered:false,finished:false};
   let raidExitAfterDone=false,raidChecklistAfter=0,raidChecklistAskedAt=0;
@@ -6055,7 +6055,9 @@ function raidGroupPanelAction(snapshot,preset,now) {
     result.canRandomFill=result.randomSlots>0&&!result.acquisitionPending?.length&&ownedNonBasic.size<6;
     const confirmed=skillLevelProgress.banished||new Set();
     const ownedNames=new Set([...skillLevelProgress.levels.keys()]);
-    const fillerNames=[...ownedNonBasic].flatMap(id=>skillLevelProgress.idNames?.has(id)?[skillLevelProgress.idNames.get(id)]:jobSkillNames[id]||[]).map(normalizeSkill).filter(name=>!configured.has(name)&&!isBasicAttack(name));
+    const fillerNames=result.randomSlots>0
+      ? [...ownedNonBasic].flatMap(id=>skillLevelProgress.idNames?.has(id)?[skillLevelProgress.idNames.get(id)]:jobSkillNames[id]||[]).map(normalizeSkill).filter(name=>!configured.has(name)&&!isBasicAttack(name))
+      : [];
     const required=[...(config.banishNames||[]).map(normalizeSkill).filter(name=>ownedNames.has(name)),...fillerNames];
     result.banishPending=[...new Set(required)].filter(name=>!confirmed.has(name));
     if(result.randomSlots>0&&ownedNonBasic.size<6||result.banishPending.length)result.done=false;
@@ -9786,7 +9788,7 @@ function hansEventStagesForLap(lap) {
   const loadGoalAction=()=>{goalAction.value=readSetting("ro-helper-goal-action")==="save"?"save":"native";};loadGoalAction();
   goalAction.onchange=()=>{writeSetting("ro-helper-goal-action",goalAction.value);goalActionHelp.hidden=goalAction.value==="save";};
   const goalActionSetting=document.createElement("div"),goalActionHelp=document.createElement("small");
-  goalActionHelp.textContent="自動選會同時接管技能與寶箱；已設定條件達標才開啟，本局不能取消。技能等級計畫中，勾選取得後放逐但未抽到的技能不擋保存；已取得才檢查等級，不等放逐成功。";goalActionHelp.style.display="block";goalActionSetting.append(goalAction,goalActionHelp);
+  goalActionHelp.textContent="普通掛機啟動後，技能目標與發現率門檻達標，並完成必要放逐，才會開啟遊戲自動選（技能＋寶箱）。目標 0 不限制等級；已取得且勾選「取得後放逐」的技能仍要放逐。本局開啟後不能取消。";goalActionHelp.style.display="block";goalActionSetting.append(goalAction,goalActionHelp);
   const noFlipSetting = document.createElement("label");
   noFlipSetting.textContent = "局內等級停止選技能卡（0＝關） ";
   const noFlipLevel = document.createElement("input");
