@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 103.1
+// @version 103.2
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -4640,7 +4640,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V103.1 網頁控制特別版";
+  const versionName = "Gear V103.2 網頁控制特別版";
   let automationMode="normal";
   const raidCompletion={entered:false,finished:false};
   let raidExitAfterDone=false,raidChecklistAfter=0,raidChecklistAskedAt=0;
@@ -8225,9 +8225,10 @@ function hansEventStagesForLap(lap) {
       const result=detail?.querySelector(kind==='star'?'.sf-msg':'.ref-result')?.textContent?.trim();
       if(now-at<400 || detail?.firstChild===node || (go?.disabled && (!result || result===run.pending.message)))return true;
       if(run.rounds){
-        // Re-evaluate the minimum after each round, including items that lost a star.
+        // Only requeue at the confirmed level. Failed items can seed a lower next round.
         const nextLevel=nextEquipmentUpgradeLevel(detail);
         if(Number.isInteger(nextLevel))run.verifiedLevels.set(run.uid,nextLevel);
+        else run.verifiedLevels.delete(run.uid);
         run.passed.add(run.uid);
         run.uid=null;
       }
@@ -8291,7 +8292,7 @@ function hansEventStagesForLap(lap) {
       if(levels.length && (run.pass===null || !run.passed.size)){
         run.pass=levels.reduce((lowest,[,level])=>Math.min(lowest,level),Infinity);
       }
-      candidates=levels.filter(([row,level])=>level<=target&&level<=run.pass&&!run.passed.has(row.dataset.uid)).map(([row])=>row);
+      candidates=levels.filter(([row,level])=>level<=target&&level===run.pass&&!run.passed.has(row.dataset.uid)).map(([row])=>row);
     }
     let row=run.uid&&candidates.find(row=>row.dataset.uid===run.uid);
     if(!row){row=candidates[0];run.uid=row?.dataset.uid;}
@@ -8312,7 +8313,7 @@ function hansEventStagesForLap(lap) {
     if(!Number.isInteger(nextLevel) || nextLevel>target)return skip('已達強化目標或不適用，跳過');
     if(run.rounds){
       run.verifiedLevels.set(run.uid,nextLevel);
-      if(nextLevel>run.pass){run.passed.add(run.uid);run.uid=null;run.next=now+100;return true;}
+      if(nextLevel!==run.pass){run.passed.add(run.uid);run.uid=null;run.next=now+100;return true;}
     }
     if(nextLevel>4 && !(run.kind==='star'?config.starRisk:config.refineRisk))return skip('未允許失敗風險，跳過');
     if(go?.disabled){
@@ -8330,7 +8331,9 @@ function hansEventStagesForLap(lap) {
     }
     if(run.kind==='refine'&&nextLevel>4){run.confirm={name:row.querySelector('.cand-info b')?.textContent.trim()};go.click();run.next=now+300;return true;}
     run.pending={node:detail.firstChild,until:now+20000,at:now,kind:run.kind,message:detail.querySelector(run.kind==='star'?'.sf-msg':'.ref-result')?.textContent?.trim()};
-    status.textContent=(run.kind==='star'?'升星至 ★':'精煉至 +')+nextLevel;go.click();return true;
+    const action=(run.kind==='star'?'升星至 ★':'精煉至 +')+nextLevel;
+    status.textContent=run.rounds?'逐件本輪：'+action+'，較高階裝備先等待':action;
+    go.click();return true;
   }
 
   // Manual card replacement: read the native UI, then invoke only its socket buttons.
