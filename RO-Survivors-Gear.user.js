@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 103.3
+// @version 104.0
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -4640,7 +4640,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V103.3 網頁控制特別版";
+  const versionName = "Gear V104.0 網頁控制特別版";
   let automationMode="normal";
   const raidCompletion={entered:false,finished:false};
   let raidExitAfterDone=false,raidChecklistAfter=0,raidChecklistAskedAt=0;
@@ -6806,6 +6806,12 @@ function hansEventStagesForLap(lap) {
     return cards.reduce((best,card) => cardRarity(card) > cardRarity(best) ? card : best);
   }
   const highestStageMode = "__highest_normal_stage__";
+  const highestChapterKey = "ro-helper-highest-stage-chapter";
+  portableSettingKeys.add(highestChapterKey);
+  const highestChapter = document.createElement("select");
+  highestChapter.setAttribute("aria-label","自動推最高關卡的章節");
+  highestChapter.append(new Option("最高關卡：第一章","1"),new Option("最高關卡：第二章","2"));
+  highestChapter.addEventListener("change",() => writeSetting(highestChapterKey,highestChapter.value));
   const expeditionLap = document.createElement("select");
   expeditionLap.setAttribute("aria-label","遠征周目");
   const lapLabels = ["一周目","二周目","三周目","四周目","五周目","六周目"];
@@ -6903,7 +6909,7 @@ function hansEventStagesForLap(lap) {
   const rotationProgress = document.createElement("div");
   rotationSettings.append(repeatsLabel, stageChecks);
   stageSettings.append(stageSummary,stageMode);
-  if (taiwanGame) stageSettings.append(expeditionLap,expeditionSpeed);
+  if (taiwanGame) stageSettings.append(highestChapter,expeditionLap,expeditionSpeed);
   stageSettings.append(fixedStage,bossTarget,rotationSettings,rotationProgress);
 
   // Hans V0.12.7 uses six difficulty factors and a stage-specific base drop count.
@@ -9480,6 +9486,7 @@ function hansEventStagesForLap(lap) {
   }
 
   function refreshStageMode() {
+    highestChapter.hidden = !taiwanGame || stageMode.value !== "highest";
     expeditionLap.hidden = stageMode.value === "highest";
     fixedStage.hidden = stageMode.value !== "fixed" && stageMode.value !== "boss";
     bossTarget.hidden = !taiwanGame || stageMode.value !== "boss";
@@ -9549,7 +9556,7 @@ function hansEventStagesForLap(lap) {
         lap:Number(expeditionLap.value),
         laps:Object.fromEntries(lapLabels.map((_,index) => [index+1,stageNamesForLap(index+1)]))
       } : {}),
-      mode:stageMode.selectedOptions[0]?.textContent || "",
+      mode:taiwanGame && stageMode.value === "highest" ? highestChapter.selectedOptions[0]?.textContent || "" : stageMode.selectedOptions[0]?.textContent || "",
       modeId:stageMode.value,
       selected:stageMode.value === "highest" ? "highest" : fixedStage.value,
       configVersion:1,bossEnabled:taiwanGame,boss:bossForStage(fixedStage.value,bossTarget.value)?.[1] || "",
@@ -9575,6 +9582,7 @@ function hansEventStagesForLap(lap) {
     loadStageSettings();
   }
   function loadStageSettings() {
+    highestChapter.value = readSetting(highestChapterKey) === "2" ? "2" : "1";
     expeditionSpeed.value = readSetting("ro-helper-expedition-speed") === "2" ? "2" : "1";
     const lap = localStorage.getItem(settingKey("ro-helper-expedition-lap"));
     expeditionLap.value = lap && lapLabels[Number(lap)-1] ? lap : "1";
@@ -10188,6 +10196,12 @@ function createNativeGoalSelection() {
       rejected.add(id);
     }
     return null;
+  }
+  function highestStageChapterTab(tabs,chapter) {
+    if(!tabs.length && chapter === "1")return {active:true};
+    const tab=tabs.find(item=>item.dataset.chtab===chapter);
+    if(!tab || tab.disabled || tab.matches('.locked,[aria-disabled="true"]') || tab.textContent.includes("🔒"))return {locked:true};
+    return {tab,active:tab.classList.contains("primary")};
   }
   const rollChoice = document.createElement("select");
   rollChoice.setAttribute("aria-label", "隊伍掉落擲骰");
@@ -11173,7 +11187,7 @@ function chooseRaidMechanicRoute(packet,now=Date.now(),blockedDirections=[]) {
       return;
     }
     try {
-      (()=>{if(!["ro-survivors.com","www.ro-survivors.com","ro.hans-webgametw.com"].includes(location.hostname))return;const key="__roMenuHelper";let stageName="", rotation={stage:undefined,completed:0}, rotationRun;const rejectedStages=new Set();let highestLap = "1";let lapTabRefreshed = false;const unavailableLaps = new Set();const visible=e=>e&&e.getClientRects().length&&!e.disabled&&getComputedStyle(e).visibility==="visible"&&!e.closest("[hidden],[inert],[aria-hidden=true]");const label=e=>e.innerText.trim();const buttons=()=>[...document.querySelectorAll("button,[role=button]")].filter(visible);const click=e=>{last=e;e.click()};let pickerFirstCard=null,pickerReadyAt=0,attemptedCard=null,attempts=0;const blocked=new Map();const trackPickup=createPickupTracker();let previousPosition=null,previousDirection=null,still=0,escapeDirection=-1,escapeUntil=0;let retriedCoordinates=false;let movePulse,nextMenuAt=0,nextCaptureAt=0,lastCoordinateAt=0;let last,held,index=0,departing=false,retriedSoloDialog=false;const route=["d","s","a","w","wd","sd","sa","wa"];const probe=document.createElement("canvas");probe.width=probe.height=128;const ctx=probe.getContext("2d",{willReadFrequently:true});const directions=[[1,0],[0,1],[-1,0],[0,-1]];let captureStatus="正在等候分頁截圖",screenshot=null,requested=false,stamp=0,previousFrame=null;const assess=()=>{const canvas=[...document.querySelectorAll("canvas")].filter(visible).sort((a,b)=>b.width*b.height-a.width*a.height)[0];if((!canvas&&!sharedVideo)||!ctx)return null;try{ctx.clearRect(0,0,128,128);if(sharedVideo?.readyState>=2){const r=canvas?.getBoundingClientRect()||{left:0,top:0,width:innerWidth,height:innerHeight},sx=sharedVideo.videoWidth/innerWidth,sy=sharedVideo.videoHeight/innerHeight;ctx.drawImage(sharedVideo,r.left*sx,r.top*sy,r.width*sx,r.height*sy,0,0,128,128)}else if(screenshot&&Date.now()-stamp<1600){const r=canvas.getBoundingClientRect(),sx=screenshot.width/innerWidth,sy=screenshot.height/innerHeight;ctx.drawImage(screenshot,r.left*sx,r.top*sy,r.width*sx,r.height*sy,0,0,128,128)}else{ctx.drawImage(canvas,0,0,128,128)}const data=ctx.getImageData(0,0,128,128).data;let content=0;const red=(x,y)=>{const i=(128*y+x)*4;return data[i+3]>150&&data[i]>95&&data[i]>1.45*data[i+1]&&data[i]>1.32*data[i+2]};for(let i=0;i<data.length;i+=64)if(data[i+3]>150&&data[i]+data[i+1]+data[i+2]>45)content++;if(content<60)return null;const prior=previousFrame;previousFrame=data;let shiftX=0,shiftY=0,alignment=Infinity;if(prior){for(let dy=-16;dy<=16;dy+=2)for(let dx=-16;dx<=16;dx+=2){let error=0;for(let y=24;y<104;y+=8)for(let x=24;x<104;x+=8){if(x>48&&x<80&&y>48&&y<80)continue;const i=(128*y+x)*4,j=(128*(y+dy)+x+dx)*4;error+=Math.abs(data[i]-prior[j])+Math.abs(data[i+1]-prior[j+1])+Math.abs(data[i+2]-prior[j+2])}if(error<alignment){alignment=error;shiftX=dx;shiftY=dy}}}const moving=(x,y)=>{if(!prior||alignment>3600)return false;const i=(128*y+x)*4,j=(128*(y+shiftY)+x+shiftX)*4;return Math.abs(data[i]-prior[j])+Math.abs(data[i+1]-prior[j+1])+Math.abs(data[i+2]-prior[j+2])>85};return directions.map(([dx,dy])=>{let score=0;for(let step=4;step<=22;step++)for(let side=-5;side<=5;side++){{const x=64+dx*step-dy*side,y=64+dy*step+dx*side;if(red(x,y))score+=12;else if(moving(x,y))score+=step<=12?3:1}}let nearMotion=0,nearRed=0;for(let step=8;step<=16;step++)for(let side=-4;side<=4;side++){const x=64+dx*step-dy*side,y=64+dy*step+dx*side;if(red(x,y))nearRed++;else if(moving(x,y))nearMotion++}const uncertain=!prior||alignment>3600;const unsafe=nearRed>=4||(!uncertain&&nearMotion>=12);let chest=0,loot=0;for(let step=7;step<=22;step++)for(let side=-6;side<=6;side++){const x=64+dx*step-dy*side,y=64+dy*step+dx*side,i=(128*y+x)*4;const r=data[i],g=data[i+1],b=data[i+2],w=23-step;if(r>75&&g>55&&r>g*1.06&&r<g*1.7&&g>b*1.32){const j=i-1024;if(data[j]>data[j+1]*1.12&&data[j+1]>data[j+2]*1.15)chest+=w;else loot+=w}else if(b>70&&b>r*1.24&&b>g*1.12&&data[i+6]<b*0.9)loot+=w}return {score,chest,loot,unsafe,uncertain}})}catch{return null}};const send=(type,k)=>(document.activeElement||document.body).dispatchEvent(new KeyboardEvent(type,{key:k,code:"Key"+k.toUpperCase(),bubbles:true,cancelable:true,keyCode:k.toUpperCase().charCodeAt(0),which:k.toUpperCase().charCodeAt(0)}));const release=()=>{if(held){for(const key of held)send("keyup",key);held=null}};const confirmDrop=createDropConfirmation();const acceptedFinalDialogs=new WeakSet();const confirmedParty=new WeakSet();let returnedResult;let bossLootEmptySince;let settlementSeenAt = 0;const usedRerolls=new WeakSet();const usedFocus=new WeakSet();const discoveryFocused=new Set();const usedBanish=new WeakSet();const startedAt = performance.now();
+      (()=>{if(!["ro-survivors.com","www.ro-survivors.com","ro.hans-webgametw.com"].includes(location.hostname))return;const key="__roMenuHelper";let stageName="", rotation={stage:undefined,completed:0}, rotationRun;const rejectedStages=new Set();let highestLap = "1";let lapTabRefreshed = false;const unavailableLaps = new Set();let scannedHighestChapter = "";const visible=e=>e&&e.getClientRects().length&&!e.disabled&&getComputedStyle(e).visibility==="visible"&&!e.closest("[hidden],[inert],[aria-hidden=true]");const label=e=>e.innerText.trim();const buttons=()=>[...document.querySelectorAll("button,[role=button]")].filter(visible);const click=e=>{last=e;e.click()};let pickerFirstCard=null,pickerReadyAt=0,attemptedCard=null,attempts=0;const blocked=new Map();const trackPickup=createPickupTracker();let previousPosition=null,previousDirection=null,still=0,escapeDirection=-1,escapeUntil=0;let retriedCoordinates=false;let movePulse,nextMenuAt=0,nextCaptureAt=0,lastCoordinateAt=0;let last,held,index=0,departing=false,retriedSoloDialog=false;const route=["d","s","a","w","wd","sd","sa","wa"];const probe=document.createElement("canvas");probe.width=probe.height=128;const ctx=probe.getContext("2d",{willReadFrequently:true});const directions=[[1,0],[0,1],[-1,0],[0,-1]];let captureStatus="正在等候分頁截圖",screenshot=null,requested=false,stamp=0,previousFrame=null;const assess=()=>{const canvas=[...document.querySelectorAll("canvas")].filter(visible).sort((a,b)=>b.width*b.height-a.width*a.height)[0];if((!canvas&&!sharedVideo)||!ctx)return null;try{ctx.clearRect(0,0,128,128);if(sharedVideo?.readyState>=2){const r=canvas?.getBoundingClientRect()||{left:0,top:0,width:innerWidth,height:innerHeight},sx=sharedVideo.videoWidth/innerWidth,sy=sharedVideo.videoHeight/innerHeight;ctx.drawImage(sharedVideo,r.left*sx,r.top*sy,r.width*sx,r.height*sy,0,0,128,128)}else if(screenshot&&Date.now()-stamp<1600){const r=canvas.getBoundingClientRect(),sx=screenshot.width/innerWidth,sy=screenshot.height/innerHeight;ctx.drawImage(screenshot,r.left*sx,r.top*sy,r.width*sx,r.height*sy,0,0,128,128)}else{ctx.drawImage(canvas,0,0,128,128)}const data=ctx.getImageData(0,0,128,128).data;let content=0;const red=(x,y)=>{const i=(128*y+x)*4;return data[i+3]>150&&data[i]>95&&data[i]>1.45*data[i+1]&&data[i]>1.32*data[i+2]};for(let i=0;i<data.length;i+=64)if(data[i+3]>150&&data[i]+data[i+1]+data[i+2]>45)content++;if(content<60)return null;const prior=previousFrame;previousFrame=data;let shiftX=0,shiftY=0,alignment=Infinity;if(prior){for(let dy=-16;dy<=16;dy+=2)for(let dx=-16;dx<=16;dx+=2){let error=0;for(let y=24;y<104;y+=8)for(let x=24;x<104;x+=8){if(x>48&&x<80&&y>48&&y<80)continue;const i=(128*y+x)*4,j=(128*(y+dy)+x+dx)*4;error+=Math.abs(data[i]-prior[j])+Math.abs(data[i+1]-prior[j+1])+Math.abs(data[i+2]-prior[j+2])}if(error<alignment){alignment=error;shiftX=dx;shiftY=dy}}}const moving=(x,y)=>{if(!prior||alignment>3600)return false;const i=(128*y+x)*4,j=(128*(y+shiftY)+x+shiftX)*4;return Math.abs(data[i]-prior[j])+Math.abs(data[i+1]-prior[j+1])+Math.abs(data[i+2]-prior[j+2])>85};return directions.map(([dx,dy])=>{let score=0;for(let step=4;step<=22;step++)for(let side=-5;side<=5;side++){{const x=64+dx*step-dy*side,y=64+dy*step+dx*side;if(red(x,y))score+=12;else if(moving(x,y))score+=step<=12?3:1}}let nearMotion=0,nearRed=0;for(let step=8;step<=16;step++)for(let side=-4;side<=4;side++){const x=64+dx*step-dy*side,y=64+dy*step+dx*side;if(red(x,y))nearRed++;else if(moving(x,y))nearMotion++}const uncertain=!prior||alignment>3600;const unsafe=nearRed>=4||(!uncertain&&nearMotion>=12);let chest=0,loot=0;for(let step=7;step<=22;step++)for(let side=-6;side<=6;side++){const x=64+dx*step-dy*side,y=64+dy*step+dx*side,i=(128*y+x)*4;const r=data[i],g=data[i+1],b=data[i+2],w=23-step;if(r>75&&g>55&&r>g*1.06&&r<g*1.7&&g>b*1.32){const j=i-1024;if(data[j]>data[j+1]*1.12&&data[j+1]>data[j+2]*1.15)chest+=w;else loot+=w}else if(b>70&&b>r*1.24&&b>g*1.12&&data[i+6]<b*0.9)loot+=w}return {score,chest,loot,unsafe,uncertain}})}catch{return null}};const send=(type,k)=>(document.activeElement||document.body).dispatchEvent(new KeyboardEvent(type,{key:k,code:"Key"+k.toUpperCase(),bubbles:true,cancelable:true,keyCode:k.toUpperCase().charCodeAt(0),which:k.toUpperCase().charCodeAt(0)}));const release=()=>{if(held){for(const key of held)send("keyup",key);held=null}};const confirmDrop=createDropConfirmation();const acceptedFinalDialogs=new WeakSet();const confirmedParty=new WeakSet();let returnedResult;let bossLootEmptySince;let settlementSeenAt = 0;const usedRerolls=new WeakSet();const usedFocus=new WeakSet();const discoveryFocused=new Set();const usedBanish=new WeakSet();const startedAt = performance.now();
 let battleStartedAt = null;
 inventoryRun = undefined;
 lootHistory.clear();
@@ -11448,7 +11462,8 @@ if(field){release();if(partyMember||partyLeader&&!proposal)return;if(last===fiel
 if (taiwanGame) {
   const selectedLap = lapLabels[Number(stageMode.value === "highest" ? highestLap : expeditionLap.value)-1];
   const lapInfo = difficultyDialog.querySelector(".lap-info")?.textContent || "";
-  const secondChapter = ["吉芬地下迷宮","時計塔地下","深淵之湖","克雷斯特漢姆修道院","尼芙菲姆原野"].includes(fixedStage.value) || document.querySelector('#ch-tabs [data-chtab="2"].primary');
+  const secondChapter = stageMode.value === "highest" ? highestChapter.value === "2" :
+    ["吉芬地下迷宮","時計塔地下","深淵之湖","克雷斯特漢姆修道院","尼芙菲姆原野"].includes(fixedStage.value) || document.querySelector('#ch-tabs [data-chtab="2"].primary');
   if (secondChapter ? !lapInfo.includes("第二章"+selectedLap) : (selectedLap === "一周目" ? !!lapInfo : !lapInfo.includes("（"+selectedLap+"）"))) {
     status.textContent = "出發周目與助手設定不符，請取消後重新開啟遠征";
     return;
@@ -11482,14 +11497,31 @@ if (stageMode.value === "rotation") {
     ? rotation.stage + " · 已完成 " + rotation.completed + " / " + repeats
     : "請勾選循環關卡";
 }
-if (!stageCards.length || stageMode.value !== "highest") unavailableLaps.clear();
+const chapterScope = taiwanGame && stageMode.value === "highest" ? highestChapter.value : "";
+if (!stageCards.length || !chapterScope || scannedHighestChapter !== chapterScope) {
+  if (scannedHighestChapter !== chapterScope) {
+    rejectedStages.clear();
+    lapTabRefreshed = false;
+    departing = false;
+  }
+  unavailableLaps.clear();
+  scannedHighestChapter = chapterScope;
+}
 
 if (taiwanGame && stageCards.length && stageName && !partyMember) {
   const chapterTabs = [...document.querySelectorAll("#ch-tabs [data-chtab]")];
-  const chapter = ["吉芬地下迷宮","時計塔地下","深淵之湖","克雷斯特漢姆修道院","尼芙菲姆原野"].includes(stageName) ? "2" :
-    stageMode.value === "highest" && chapterTabs.some(tab => tab.dataset.chtab === "2" && !/🔒/.test(tab.textContent)) ? "2" : "1";
+  const chapter = chapterScope || (["吉芬地下迷宮","時計塔地下","深淵之湖","克雷斯特漢姆修道院","尼芙菲姆原野"].includes(stageName) ? "2" : "1");
   const current = chapterTabs.find(tab => tab.classList.contains("primary"));
-  const target = chapterTabs.find(tab => tab.dataset.chtab === chapter);
+  let target = chapterTabs.find(tab => tab.dataset.chtab === chapter);
+  if(chapterScope){
+    const chosen=highestStageChapterTab(chapterTabs,chapter);
+    if(chosen.locked){
+      release();
+      status.textContent=(chapter==="2"?"第二章":"第一章")+"尚未解鎖或章節未顯示";
+      return;
+    }
+    target=chosen.active?current:chosen.tab;
+  }
   if (target && current !== target) {
     release();
     if (/🔒/.test(target.textContent) || target.disabled) {
@@ -11499,6 +11531,7 @@ if (taiwanGame && stageCards.length && stageName && !partyMember) {
     lapTabRefreshed = false;
     departing = false;
     rejectedStages.clear();
+    unavailableLaps.clear();
     click(target);
     return;
   }
@@ -11516,7 +11549,7 @@ if (taiwanGame && stageCards.length && stageName && !partyMember) {
     lapId = available.filter(id=>!unavailableLaps.has(id)).sort((a,b)=>Number(b)-Number(a))[0];
     if (!lapId) {
       release();
-      status.textContent = "目前已解鎖的周目沒有可出發的關卡";
+      status.textContent = (chapterScope === "2" ? "第二章" : "第一章") + "已解鎖的周目沒有可出發的關卡";
       return;
     }
     highestLap = lapId;
