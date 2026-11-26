@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 104.1
+// @version 105.0
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -4640,7 +4640,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V104.1 網頁控制特別版";
+  const versionName = "Gear V105.0 網頁控制特別版";
   let automationMode="normal";
   const raidCompletion={entered:false,finished:false};
   let raidExitAfterDone=false,raidChecklistAfter=0,raidChecklistAskedAt=0;
@@ -9069,10 +9069,11 @@ function hansEventStagesForLap(lap) {
       const saved = JSON.parse(readSetting(growthKey));
       return {
         rebirth:saved?.rebirth === true,
+        statBasis:saved?.statBasis === "total" ? "total" : "base",
         targets:Array.isArray(saved?.targets) ? saved.targets.filter(({stat,target}) =>
           Object.hasOwn(growthStats,stat) && Number.isSafeInteger(target) && target > 0).slice(0,6) : []
       };
-    } catch { return {rebirth:false,targets:[]}; }
+    } catch { return {rebirth:false,statBasis:"base",targets:[]}; }
   }
   growthButton.onclick = () => {
     if (activeAccount === "local" || document.querySelector("#ro-helper-settings[open]")) return;
@@ -9088,7 +9089,13 @@ function hansEventStagesForLap(lap) {
     const rebirthLabel = document.createElement("label");
     rebirthLabel.append(rebirth," Base Lv 70 起自動轉生");
     form.append("漢斯版轉生與素質",rebirthLabel,
-      "轉生會把 Base Lv 和已分配素質重置。素質由上往下點，以角色狀態的總值為準。");
+      "轉生會把 Base Lv 和已分配素質重置。素質由上往下點。");
+    const statBasis = document.createElement("select");
+    statBasis.append(new Option("基礎素質","base"),new Option("基礎＋裝備（面板總值）","total"));
+    statBasis.value = settings.statBasis;
+    const basisLabel = document.createElement("label");
+    basisLabel.append("素質目標依據 ",statBasis);
+    form.append(basisLabel);
     const rows = [];
     for (let index=0;index<6;index++) {
       const row = document.createElement("div");
@@ -9100,8 +9107,8 @@ function hansEventStagesForLap(lap) {
       target.type = "number";
       target.min = "1";
       target.step = "1";
-      target.placeholder = "目標總值";
-      target.setAttribute("aria-label","優先 "+(index+1)+" 目標總值");
+      target.placeholder = "目標值";
+      target.setAttribute("aria-label","優先 "+(index+1)+" 目標值");
       target.style.width = "7em";
       target.value = settings.targets[index]?.target ?? "";
       stat.onchange = () => { target.disabled = !stat.value; target.required = Boolean(stat.value); };
@@ -9127,7 +9134,7 @@ function hansEventStagesForLap(lap) {
         feedback.textContent = "每種素質請只設定一次。";
         return;
       }
-      writeSetting(growthKey,JSON.stringify({rebirth:rebirth.checked,targets}));
+      writeSetting(growthKey,JSON.stringify({rebirth:rebirth.checked,statBasis:statBasis.value,targets}));
       nextGrowthCheck = 0;
       dialog.close();
     };
@@ -9139,30 +9146,30 @@ function hansEventStagesForLap(lap) {
 
   let growthRun;
   let nextGrowthCheck = 0;
-  function displayedGrowthTotal(row) {
+  function displayedGrowthValue(row,statBasis) {
     const value = row?.querySelector(".prim-val");
     if (!value) return NaN;
     const bonus = value.querySelector(".prim-bonus");
     const suffix = bonus?.textContent.trim();
     const base = value.textContent.trim().slice(0,suffix ? -suffix.length : undefined).trim();
     if (!/^\d+(?:\.\d+)?$/.test(base)) return NaN;
-    if (!suffix) return Number(base);
+    if (statBasis === "base" || !suffix) return Number(base);
     const match = suffix.match(/^\+\s*([+-]?\d+(?:\.\d+)?)$/);
     return match ? Number(base)+Number(match[1]) : NaN;
   }
-  function allocateGrowthStats(panel, targets) {
+  function allocateGrowthStats(panel, targets, statBasis) {
     let spent = 0;
     for (const {stat,target} of targets) {
       for (;;) {
         const add = panel.querySelector(`#cp-prim .prim-btn[data-s="${stat}"][data-d="1"]`);
         const row = add?.closest(".prim-row");
-        const before = displayedGrowthTotal(row);
+        const before = displayedGrowthValue(row,statBasis);
         if (!Number.isFinite(before)) return spent;
         if (before >= target) break;
         if (add.disabled || spent >= 200) return spent;
         add.click();
         const updated = panel.querySelector(`#cp-prim .prim-btn[data-s="${stat}"][data-d="1"]`);
-        if (!(displayedGrowthTotal(updated?.closest(".prim-row")) > before)) return spent;
+        if (!(displayedGrowthValue(updated?.closest(".prim-row"),statBasis) > before)) return spent;
         spent++;
       }
     }
@@ -9234,7 +9241,7 @@ function hansEventStagesForLap(lap) {
       }
       if (settings.targets.length && stats && !stats.disabled) {
         if (stats !== originalTab) stats.click();
-        const spent = allocateGrowthStats(panel,settings.targets);
+        const spent = allocateGrowthStats(panel,settings.targets,settings.statBasis);
         if (spent) status.textContent = "已依設定分配 "+spent+" 次素質";
       }
       return false;
