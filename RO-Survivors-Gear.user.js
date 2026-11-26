@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name RO 練等助手 Gear 網頁控制特別版
 // @namespace ro-survivors-helper
-// @version 103.0
+// @version 103.1
 // @description 共用電腦網頁控制特別版核心；Gear 資料與網路連線轉接。
 // @updateURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
 // @downloadURL https://raw.githubusercontent.com/UnderPikaSui/ro-survivors-gear/main/RO-Survivors-Gear.user.js
@@ -4640,7 +4640,7 @@ if(window.top!==window || document.querySelector(`section[aria-label="RO 練等�
 (() => {
   const runtime = __roGearRuntime;
   const isInvalidatedRuntime = error => /Extension context invalidated/i.test(error?.message ?? String(error));
-  const versionName = "Gear V103.0 網頁控制特別版";
+  const versionName = "Gear V103.1 網頁控制特別版";
   let automationMode="normal";
   const raidCompletion={entered:false,finished:false};
   let raidExitAfterDone=false,raidChecklistAfter=0,raidChecklistAskedAt=0;
@@ -8135,6 +8135,15 @@ function hansEventStagesForLap(lap) {
   function nextEquipmentUpgradeLevel(detail) {
     return Number(detail?.querySelector('.ref-ladder .next')?.firstChild?.textContent.match(/^[+★]\s*(\d+)/)?.[1]);
   }
+  function listedEquipmentUpgradeLevel(row,kind) {
+    const name=row.querySelector('.cand-info b')?.textContent?.normalize('NFKC').trim();
+    if(!name)return 1;
+    if(kind==='star'){
+      const stars=row.querySelector('.cand-side .sf-star')?.textContent?.normalize('NFKC').trim();
+      return 1+Number(stars?.match(/^★\s*(\d+)$/)?.[1]||name.match(/\s★\s*(\d+)$/)?.[1]||0);
+    }
+    return 1+Number(name.match(/^\+\s*(\d+)\s+/)?.[1]||0);
+  }
   function upgradeCandidate(row,config,kind){
     const uid=row?.dataset?.uid,info=row?.querySelector(".cand-info small")?.textContent?.trim()||"";
     if(!uid || !info)return false;
@@ -8201,7 +8210,7 @@ function hansEventStagesForLap(lap) {
     if(!run){
       const stage=find('#stages:not(.hidden)');if(stage){stage.querySelector('#stg-close')?.click();return true;}
       if(find('.overlay:not(.hidden)'))return false;
-      run=upgradeRun={kind:config.refine?"refine":"star",skip:new Set(),next:0,started:now,uid:null,bought:0,rounds:config.order!=="single",pass:1,passed:new Set(),retryPass:false};
+      run=upgradeRun={kind:config.refine?"refine":"star",skip:new Set(),next:0,started:now,uid:null,bought:0,rounds:config.order!=="single",pass:null,passed:new Set(),verifiedLevels:new Map()};
     }
     const finish=message=>{find('#sf-close')?.click();if(find('#smith:not(.hidden)'))find('#smith-close')?.click();if(find('#shop:not(.hidden)'))find('#shop-close')?.click();requestLobbyNpc('cancel');run.done=true;status.textContent=message;return true;};
     const skip=message=>{run.skip.add(run.kind+":"+run.uid);run.uid=null;run.pending=null;run.confirm=null;run.next=now+300;status.textContent=message;return true;};
@@ -8216,8 +8225,9 @@ function hansEventStagesForLap(lap) {
       const result=detail?.querySelector(kind==='star'?'.sf-msg':'.ref-result')?.textContent?.trim();
       if(now-at<400 || detail?.firstChild===node || (go?.disabled && (!result || result===run.pending.message)))return true;
       if(run.rounds){
-        // Give every eligible item a turn before retrying a failure at this tier.
-        if(nextEquipmentUpgradeLevel(detail)<=run.pass)run.retryPass=true;
+        // Re-evaluate the minimum after each round, including items that lost a star.
+        const nextLevel=nextEquipmentUpgradeLevel(detail);
+        if(Number.isInteger(nextLevel))run.verifiedLevels.set(run.uid,nextLevel);
         run.passed.add(run.uid);
         run.uid=null;
       }
@@ -8274,18 +8284,24 @@ function hansEventStagesForLap(lap) {
     const prefix=run.kind==='star'?'sf':'smith',list=find('#'+prefix+'-list');
     if(!list)return finish('讀不到鐵匠清單，繼續掛機');
     const rows=[...list.querySelectorAll('.cand[data-uid]')];
-    const candidates=rows.filter(row=>upgradeCandidate(row,config,run.kind)&&!run.skip.has(run.kind+':'+row.dataset.uid) && !run.passed.has(row.dataset.uid));
     const target=Number(run.kind==='star'?config.starTarget||4:config.refineTarget||4);
+    let candidates=rows.filter(row=>upgradeCandidate(row,config,run.kind)&&!run.skip.has(run.kind+':'+row.dataset.uid));
+    if(run.rounds){
+      const levels=candidates.map(row=>[row,run.verifiedLevels.get(row.dataset.uid)??listedEquipmentUpgradeLevel(row,run.kind)]);
+      if(levels.length && (run.pass===null || !run.passed.size)){
+        run.pass=levels.reduce((lowest,[,level])=>Math.min(lowest,level),Infinity);
+      }
+      candidates=levels.filter(([row,level])=>level<=target&&level<=run.pass&&!run.passed.has(row.dataset.uid)).map(([row])=>row);
+    }
     let row=run.uid&&candidates.find(row=>row.dataset.uid===run.uid);
     if(!row){row=candidates[0];run.uid=row?.dataset.uid;}
     if(!row){
       if(run.rounds && run.passed.size){
-        if(!run.retryPass)run.pass=Math.min(run.pass+1,target);
-        run.retryPass=false;
+        run.pass=null;
         run.passed.clear();
         return true;
       }
-      if(run.kind==='refine'&&config.star){run.kind='star';run.pass=1;run.retryPass=false;return true;}
+      if(run.kind==='refine'&&config.star){run.kind='star';run.pass=null;run.verifiedLevels.clear();return true;}
       return finish('精煉／升星本次處理完成，缺材料與不符條件裝備已跳過');
     }
     if(!row.classList.contains('sel')){row.click();run.next=now+150;return true;}
@@ -8294,7 +8310,10 @@ function hansEventStagesForLap(lap) {
     if(config.tier>0 && (!Number.isInteger(tier)||tier<config.tier))return skip('未達指定Tier，跳過');
     const nextLevel=nextEquipmentUpgradeLevel(detail);
     if(!Number.isInteger(nextLevel) || nextLevel>target)return skip('已達強化目標或不適用，跳過');
-    if(run.rounds && nextLevel>run.pass){run.passed.add(run.uid);run.uid=null;run.next=now+100;return true;}
+    if(run.rounds){
+      run.verifiedLevels.set(run.uid,nextLevel);
+      if(nextLevel>run.pass){run.passed.add(run.uid);run.uid=null;run.next=now+100;return true;}
+    }
     if(nextLevel>4 && !(run.kind==='star'?config.starRisk:config.refineRisk))return skip('未允許失敗風險，跳過');
     if(go?.disabled){
       const ore=detail?.querySelector('.ref-ore.sel'),have=Number((ore?.querySelector('small')?.textContent||'').replace(/[,，]/g,'').match(/\d+/)?.[0]);
